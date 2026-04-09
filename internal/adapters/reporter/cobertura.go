@@ -20,13 +20,13 @@ func NewCobertura() *Cobertura { return &Cobertura{} }
 
 // coberturaXML is the root element of the Cobertura XML report.
 type coberturaXML struct {
-	XMLName    xml.Name          `xml:"coverage"`
-	Version    string            `xml:"version,attr"`
-	Timestamp  int64             `xml:"timestamp,attr"`
-	LinesValid int               `xml:"lines-valid,attr"`
-	LinesCovered int             `xml:"lines-covered,attr"`
-	LineRate   float64           `xml:"line-rate,attr"`
-	Packages   coberturaPackages `xml:"packages"`
+	XMLName      xml.Name          `xml:"coverage"`
+	Version      string            `xml:"version,attr"`
+	Timestamp    int64             `xml:"timestamp,attr"`
+	LinesValid   int               `xml:"lines-valid,attr"`
+	LinesCovered int               `xml:"lines-covered,attr"`
+	LineRate     float64           `xml:"line-rate,attr"`
+	Packages     coberturaPackages `xml:"packages"`
 }
 
 type coberturaPackages struct {
@@ -34,9 +34,9 @@ type coberturaPackages struct {
 }
 
 type coberturaPackage struct {
-	Name     string            `xml:"name,attr"`
-	LineRate float64           `xml:"line-rate,attr"`
-	Classes  coberturaClasses  `xml:"classes"`
+	Name     string           `xml:"name,attr"`
+	LineRate float64          `xml:"line-rate,attr"`
+	Classes  coberturaClasses `xml:"classes"`
 }
 
 type coberturaClasses struct {

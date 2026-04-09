@@ -5,6 +5,8 @@
 **A self-contained test runner and coverage tool for Neovim plugins and distributions.**
 
 [![CI](https://github.com/jedi-knights/neospec/actions/workflows/ci.yml/badge.svg)](https://github.com/jedi-knights/neospec/actions/workflows/ci.yml)
+[![Release](https://github.com/jedi-knights/neospec/actions/workflows/release.yml/badge.svg)](https://github.com/jedi-knights/neospec/actions/workflows/release.yml)
+[![GoReleaser](https://github.com/jedi-knights/neospec/actions/workflows/goreleaser.yml/badge.svg)](https://github.com/jedi-knights/neospec/actions/workflows/goreleaser.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/jedi-knights/neospec)](https://goreportcard.com/report/github.com/jedi-knights/neospec)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 ![coverage](https://img.shields.io/badge/coverage-0.0%25-red)
@@ -38,7 +40,7 @@ neospec is a single binary that:
 - **Downloads and caches Neovim automatically** from the official GitHub releases — the right version for your OS and architecture, every time
 - **Isolates every test run** in a clean XDG environment so your tests cannot read or mutate your real Neovim config
 - **Instruments Lua coverage** via `debug.sethook` with no changes to your code
-- **Emits reports** in LCOV, Cobertura XML, Coveralls JSON, JUnit XML, and a color console summary — the formats your coverage service, CI parser, and badge generator already accept
+- **Emits reports** in LCOV, Cobertura XML, JUnit XML, and a color console summary — the formats your CI parser and badge generator already accept
 
 ## Installation
 
@@ -239,9 +241,6 @@ jobs:
           threshold: "80"             # fail if coverage < 80%
           badge-patch: "true"         # update README badge
 
-      - uses: coverallsapp/github-action@v2
-        with:
-          file: coverage/lcov.info
 ```
 
 ### Action inputs
@@ -367,6 +366,18 @@ go build ./...
 go test ./...
 ```
 
+### Git hooks
+
+A pre-push hook is included in `.githooks/pre-push`. It runs `golangci-lint` before every push and blocks the push if any issues are found, keeping CI green.
+
+Activate it once after cloning:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The hook requires `golangci-lint` v2 to be installed locally. If it is not found, the hook skips silently rather than blocking the push. Install it from [golangci-lint.run](https://golangci-lint.run/welcome/install/).
+
 ### Running tests
 
 ```bash
@@ -408,7 +419,7 @@ internal/
     neovim/                 GitHub release download and binary cache
     sandbox/                Per-run XDG environment isolation
     runner/                 Test file discovery and Neovim subprocess execution
-    reporter/               LCOV, Cobertura, Coveralls, JUnit, console
+    reporter/               LCOV, Cobertura, JUnit, console
     badge/                  README coverage badge patching
 
 internal/adapters/runner/lua/

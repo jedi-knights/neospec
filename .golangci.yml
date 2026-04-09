@@ -1,0 +1,70 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - gocyclo
+    - revive
+
+  settings:
+    gocyclo:
+      # Flag functions with cyclomatic complexity > 7.
+      # min-complexity is the lowest value that gets reported, so 8 enforces ≤ 7.
+      min-complexity: 8
+
+    revive:
+      rules:
+        - name: exported
+          severity: warning
+
+  exclusions:
+    rules:
+      # Deferred close on read-only resources (response body, gzip reader, zip
+      # archive) — the error is not actionable and suppressing it is idiomatic Go.
+      - linters: [errcheck]
+        text: "Error return value of `(resp\\.Body|gz|r)\\.Close` is not checked"
+
+      # Tar source file opened for reading — close error is not actionable.
+      - linters: [errcheck]
+        path: "internal/adapters/neovim/cache\\.go"
+        text: "Error return value of `f\\.Close` is not checked"
+
+      # Sandbox cleanup: the sandbox directory is best-effort; a close error
+      # after a test run does not affect correctness.
+      - linters: [errcheck]
+        path: "internal/adapters/runner/executor\\.go"
+        text: "Error return value of `sb\\.Close` is not checked"
+
+      # fmt.Fprint* on io.Writer in reporter code — errors surface on the next
+      # write and are returned by the Write method; inline checking is noise.
+      - linters: [errcheck]
+        path: "internal/adapters/reporter/"
+        text: "Error return value of `fmt\\.Fprint"
+
+      # Test files: relax errcheck and complexity — test helpers often chain
+      # calls and assertions without explicit error propagation.
+      - linters: [errcheck, gocyclo]
+        path: "_test\\.go"
+
+      # Archive extraction in neovim/cache.go and the HTTP download in
+      # downloader.go have inherent branching (tar/zip format handling,
+      # multiple I/O error paths) that cannot be reduced without harming clarity.
+      - linters: [gocyclo]
+        path: "internal/adapters/neovim/(cache|downloader)\\.go"
+
+      # Config env-var application is a linear cascade of independent checks —
+      # extracting helpers would obscure the intent without reducing real complexity.
+      - linters: [gocyclo]
+        path: "internal/config/config\\.go"
+
+      # CLI orchestration in run.go: runTests is a sequential multi-step pipeline
+      # and applyFlags/reporterFor are simple switch/conditional dispatchers.
+      # Splitting them further would harm readability without a logical benefit.
+      - linters: [gocyclo]
+        path: "cmd/neospec/commands/run\\.go"
+
+formatters:
+  enable:
+    - goimports

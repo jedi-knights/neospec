@@ -11,6 +11,7 @@ import (
 // OS represents a target operating system.
 type OS string
 
+// Supported operating systems.
 const (
 	OSLinux   OS = "linux"
 	OSDarwin  OS = "darwin"
@@ -20,6 +21,7 @@ const (
 // Arch represents a CPU architecture.
 type Arch string
 
+// Supported CPU architectures.
 const (
 	ArchAMD64 Arch = "x86_64"
 	ArchARM64 Arch = "arm64"

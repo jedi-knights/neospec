@@ -70,16 +70,16 @@ func (r *Runner) Run(ctx context.Context, files []string) (*domain.SuiteResult, 
 
 // runOutput is the JSON structure that the Lua harness writes to stdout.
 type runOutput struct {
-	Tests    []testJSON    `json:"tests"`
+	Tests    []testJSON     `json:"tests"`
 	Coverage []coverageJSON `json:"coverage"`
 }
 
 type testJSON struct {
-	Name     string  `json:"name"`
-	Status   string  `json:"status"`
+	Name       string  `json:"name"`
+	Status     string  `json:"status"`
 	DurationMs float64 `json:"duration_ms"`
-	Output   string  `json:"output"`
-	Error    string  `json:"error"`
+	Output     string  `json:"output"`
+	Error      string  `json:"error"`
 }
 
 type coverageJSON struct {
@@ -150,7 +150,9 @@ func parseOutput(data []byte) (*domain.SuiteResult, *domain.CoverageData, error)
 		}
 		for lineStr, count := range fc.Lines {
 			var lineNo int
-			fmt.Sscan(lineStr, &lineNo)
+			if _, err := fmt.Sscan(lineStr, &lineNo); err != nil {
+				continue
+			}
 			fileCov.Lines[lineNo] = count
 		}
 		cov.Files = append(cov.Files, fileCov)

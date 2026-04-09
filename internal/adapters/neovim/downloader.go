@@ -26,7 +26,7 @@ func NewDownloader() *Downloader {
 
 // Download fetches the release archive for version+platform and writes it to
 // destPath, creating parent directories as needed.
-func (d *Downloader) Download(ctx context.Context, v domain.Version, p domain.Platform, destPath string) error {
+func (d *Downloader) Download(ctx context.Context, v domain.Version, p domain.Platform, destPath string) (retErr error) {
 	assetName := v.AssetName(p)
 	if assetName == "" {
 		return fmt.Errorf("no asset defined for platform %s", p)
@@ -57,7 +57,11 @@ func (d *Downloader) Download(ctx context.Context, v domain.Version, p domain.Pl
 	if err != nil {
 		return fmt.Errorf("creating archive file: %w", err)
 	}
-	defer f.Close()
+	defer func() {
+		if cerr := f.Close(); cerr != nil && retErr == nil {
+			retErr = cerr
+		}
+	}()
 
 	if _, err := io.Copy(f, resp.Body); err != nil {
 		return fmt.Errorf("writing archive: %w", err)

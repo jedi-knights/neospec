@@ -19,13 +19,13 @@ type JUnit struct{}
 func NewJUnit() *JUnit { return &JUnit{} }
 
 type junitTestSuites struct {
-	XMLName    xml.Name        `xml:"testsuites"`
-	Tests      int             `xml:"tests,attr"`
-	Failures   int             `xml:"failures,attr"`
-	Errors     int             `xml:"errors,attr"`
-	Skipped    int             `xml:"skipped,attr"`
-	Time       float64         `xml:"time,attr"`
-	Timestamp  string          `xml:"timestamp,attr"`
+	XMLName    xml.Name         `xml:"testsuites"`
+	Tests      int              `xml:"tests,attr"`
+	Failures   int              `xml:"failures,attr"`
+	Errors     int              `xml:"errors,attr"`
+	Skipped    int              `xml:"skipped,attr"`
+	Time       float64          `xml:"time,attr"`
+	Timestamp  string           `xml:"timestamp,attr"`
 	TestSuites []junitTestSuite `xml:"testsuite"`
 }
 
@@ -40,11 +40,11 @@ type junitTestSuite struct {
 }
 
 type junitTestCase struct {
-	Name      string          `xml:"name,attr"`
-	Time      float64         `xml:"time,attr"`
-	Failure   *junitFailure   `xml:"failure,omitempty"`
-	Error     *junitError     `xml:"error,omitempty"`
-	Skipped   *junitSkipped   `xml:"skipped,omitempty"`
+	Name    string        `xml:"name,attr"`
+	Time    float64       `xml:"time,attr"`
+	Failure *junitFailure `xml:"failure,omitempty"`
+	Error   *junitError   `xml:"error,omitempty"`
+	Skipped *junitSkipped `xml:"skipped,omitempty"`
 }
 
 type junitFailure struct {

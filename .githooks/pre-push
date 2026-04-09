@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# pre-push hook: run golangci-lint before pushing to any remote.
+# Install: git config core.hooksPath .githooks
+
+set -euo pipefail
+
+if ! command -v golangci-lint &>/dev/null; then
+  echo "pre-push: golangci-lint not found — skipping lint check" >&2
+  echo "  Install: https://golangci-lint.run/welcome/install/" >&2
+  exit 0
+fi
+
+echo "pre-push: running golangci-lint..." >&2
+golangci-lint run ./...

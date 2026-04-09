@@ -125,7 +125,9 @@ func runTests(ctx context.Context, flags *runFlags) error {
 		}
 		writeErr := r.Write(ctx, f, suite, cov)
 		if f != os.Stdout {
-			f.Close()
+			if cerr := f.Close(); cerr != nil && writeErr == nil {
+				writeErr = cerr
+			}
 		}
 		if writeErr != nil {
 			return fmt.Errorf("writing %s report: %w", format, writeErr)
