@@ -5,6 +5,7 @@ import "time"
 // TestStatus is the outcome of a single test case.
 type TestStatus int
 
+// Test outcome constants.
 const (
 	StatusPass TestStatus = iota
 	StatusFail

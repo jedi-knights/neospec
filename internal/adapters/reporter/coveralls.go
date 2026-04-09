@@ -19,17 +19,17 @@ func NewCoveralls() *Coveralls { return &Coveralls{} }
 
 // coverallsPayload is the top-level Coveralls JSON structure.
 type coverallsPayload struct {
-	RepoToken    string            `json:"repo_token,omitempty"`
-	ServiceName  string            `json:"service_name"`
-	SourceFiles  []coverallsSource `json:"source_files"`
+	RepoToken   string            `json:"repo_token,omitempty"`
+	ServiceName string            `json:"service_name"`
+	SourceFiles []coverallsSource `json:"source_files"`
 }
 
 // coverallsSource represents a single source file in the Coveralls format.
 // Coverage is a sparse array where index is line number - 1, value is hit count
 // or null for non-executable lines.
 type coverallsSource struct {
-	Name     string   `json:"name"`
-	Coverage []*int   `json:"coverage"` // nil = not executable
+	Name     string `json:"name"`
+	Coverage []*int `json:"coverage"` // nil = not executable
 }
 
 func (c *Coveralls) Write(_ context.Context, w io.Writer, _ *domain.SuiteResult, cov *domain.CoverageData) error {

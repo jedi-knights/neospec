@@ -30,8 +30,8 @@ func TestFileCoveragePercentage(t *testing.T) {
 func TestCoverageDataAggregate(t *testing.T) {
 	cov := &domain.CoverageData{
 		Files: []*domain.FileCoverage{
-			{Path: "a.lua", Lines: map[int]int{1: 1, 2: 0}},  // 1/2 hit
-			{Path: "b.lua", Lines: map[int]int{1: 1, 2: 1}},  // 2/2 hit
+			{Path: "a.lua", Lines: map[int]int{1: 1, 2: 0}}, // 1/2 hit
+			{Path: "b.lua", Lines: map[int]int{1: 1, 2: 1}}, // 2/2 hit
 		},
 	}
 	if cov.TotalLines() != 4 {

@@ -149,7 +149,9 @@ func extractZip(archivePath, destDir string) error {
 			return err
 		}
 		writeErr := writeFile(target, rc, f.Mode())
-		rc.Close()
+		if cerr := rc.Close(); cerr != nil && writeErr == nil {
+			writeErr = cerr
+		}
 		if writeErr != nil {
 			return writeErr
 		}
@@ -157,14 +159,18 @@ func extractZip(archivePath, destDir string) error {
 	return nil
 }
 
-func writeFile(path string, r io.Reader, mode os.FileMode) error {
+func writeFile(path string, r io.Reader, mode os.FileMode) (retErr error) {
 	dst, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 	if err != nil {
 		return err
 	}
-	defer dst.Close()
-	_, err = io.Copy(dst, r)
-	return err
+	defer func() {
+		if cerr := dst.Close(); cerr != nil && retErr == nil {
+			retErr = cerr
+		}
+	}()
+	_, retErr = io.Copy(dst, r)
+	return
 }
 
 // stripFirstComponent removes the first path segment from a slash-separated

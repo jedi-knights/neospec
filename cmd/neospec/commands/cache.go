@@ -25,7 +25,7 @@ func newCacheCleanCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "clean",
 		Short: "Remove all cached Neovim binaries",
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			cfg, _ := config.Load("neospec.toml")
 			if err := os.RemoveAll(cfg.CacheDir); err != nil {
 				return fmt.Errorf("cleaning cache: %w", err)
@@ -40,7 +40,7 @@ func newCacheListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
 		Short: "List cached Neovim versions and their sizes",
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			cfg, _ := config.Load("neospec.toml")
 			return listCache(cfg.CacheDir)
 		},
