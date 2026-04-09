@@ -56,8 +56,6 @@ release:
   github:
     owner: jedi-knights
     name: neospec
-  # Use the tag annotation written by go-semantic-release as the release body.
-  use_existing_draft_release: false
   draft: false
   prerelease: auto
   name_template: "v{{.Version}}"
