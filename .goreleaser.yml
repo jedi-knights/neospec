@@ -1,0 +1,63 @@
+version: 2
+
+project_name: neospec
+
+before:
+  hooks:
+    - go mod download
+    - go mod verify
+
+builds:
+  - id: neospec
+    main: ./cmd/neospec
+    binary: neospec
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      # Windows arm64 is not yet a supported Neovim release target.
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    flags:
+      - -trimpath
+
+archives:
+  - id: neospec
+    builds: [neospec]
+    # neospec_0.1.0_linux_amd64.tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE
+      - neospec.toml.example
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+# Changelog is managed by go-semantic-release (CHANGELOG.md).
+# GoReleaser's built-in changelog is disabled to avoid duplication.
+changelog:
+  disable: true
+
+release:
+  github:
+    owner: jedi-knights
+    name: neospec
+  # Use the tag annotation written by go-semantic-release as the release body.
+  use_existing_draft_release: false
+  draft: false
+  prerelease: auto
+  name_template: "v{{.Version}}"
