@@ -28,6 +28,11 @@ jobs:
           # Full history is required for commit analysis across all tags.
           fetch-depth: 0
 
+      - name: Configure git identity
+        run: |
+          git config --global user.name "semantic-release-bot"
+          git config --global user.email "semantic-release-bot@users.noreply.github.com"
+
       - uses: jedi-knights/go-semantic-release@v0
         with:
           github_token: ${{ secrets.GH_TOKEN }}
