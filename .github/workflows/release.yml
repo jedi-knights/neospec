@@ -27,6 +27,9 @@ jobs:
         with:
           # Full history is required for commit analysis across all tags.
           fetch-depth: 0
+          # Use PAT so go-semantic-release can push the VERSION/CHANGELOG
+          # commit and the tag back to main.
+          token: ${{ secrets.GH_TOKEN }}
 
       - name: Configure git identity
         run: |
