@@ -366,6 +366,18 @@ go build ./...
 go test ./...
 ```
 
+### Git hooks
+
+A pre-push hook is included in `.githooks/pre-push`. It runs `golangci-lint` before every push and blocks the push if any issues are found, keeping CI green.
+
+Activate it once after cloning:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The hook requires `golangci-lint` v2 to be installed locally. If it is not found, the hook skips silently rather than blocking the push. Install it from [golangci-lint.run](https://golangci-lint.run/welcome/install/).
+
 ### Running tests
 
 ```bash
