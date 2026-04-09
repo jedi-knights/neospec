@@ -1,0 +1,82 @@
+name: neospec
+description: Run Lua tests and collect coverage for Neovim plugins and distributions.
+author: Jedi Knights
+
+branding:
+  icon: check-circle
+  color: green
+
+inputs:
+  neovim-version:
+    description: Neovim version to use (stable, nightly, or semver like 0.10.4)
+    required: false
+    default: stable
+  test-patterns:
+    description: Comma-separated glob patterns for test file discovery
+    required: false
+    default: "test/**/*_spec.lua"
+  coverage-dir:
+    description: Directory for coverage report files
+    required: false
+    default: coverage
+  formats:
+    description: Comma-separated list of output formats (console, lcov, cobertura, coveralls, junit)
+    required: false
+    default: console
+  badge-patch:
+    description: Patch the coverage badge in README.md
+    required: false
+    default: "false"
+  readme-path:
+    description: Path to README.md for badge patching
+    required: false
+    default: README.md
+  threshold:
+    description: Minimum required coverage percentage (fails if below)
+    required: false
+    default: "0"
+  verbose:
+    description: Enable verbose output
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Download neospec
+      shell: bash
+      run: |
+        set -euo pipefail
+        OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+        ARCH="$(uname -m)"
+        case "$ARCH" in
+          x86_64) ARCH="x86_64" ;;
+          aarch64|arm64) ARCH="arm64" ;;
+          *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;;
+        esac
+        VERSION="${{ env.NEOSPEC_ACTION_VERSION || 'latest' }}"
+        if [ "$VERSION" = "latest" ]; then
+          VERSION="$(curl -fsSL https://api.github.com/repos/jedi-knights/neospec/releases/latest | grep '"tag_name"' | sed 's/.*"tag_name": "\(.*\)".*/\1/')"
+        fi
+        URL="https://github.com/jedi-knights/neospec/releases/download/${VERSION}/neospec-${OS}-${ARCH}"
+        echo "Downloading neospec ${VERSION} for ${OS}/${ARCH}"
+        curl -fsSL "$URL" -o "${{ runner.tool_cache }}/neospec"
+        chmod +x "${{ runner.tool_cache }}/neospec"
+        echo "${{ runner.tool_cache }}" >> "$GITHUB_PATH"
+
+    - name: Run neospec
+      shell: bash
+      env:
+        NEOSPEC_NEOVIM_VERSION: ${{ inputs.neovim-version }}
+        NEOSPEC_TEST_PATTERNS: ${{ inputs.test-patterns }}
+        NEOSPEC_COVERAGE_DIR: ${{ inputs.coverage-dir }}
+        NEOSPEC_FORMATS: ${{ inputs.formats }}
+        NEOSPEC_BADGE_PATCH: ${{ inputs.badge-patch }}
+        NEOSPEC_README_PATH: ${{ inputs.readme-path }}
+        NEOSPEC_VERBOSE: ${{ inputs.verbose }}
+      run: |
+        THRESHOLD_FLAG=""
+        if [ "${{ inputs.threshold }}" != "0" ]; then
+          THRESHOLD_FLAG="--threshold=${{ inputs.threshold }}"
+        fi
+        neospec run $THRESHOLD_FLAG

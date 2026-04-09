@@ -1,0 +1,37 @@
+# neospec.toml — annotated example configuration
+# Copy to neospec.toml and adjust to your project.
+
+# Neovim version to download and use for tests.
+# Values: "stable" | "nightly" | semantic version like "0.10.4"
+neovim_version = "stable"
+
+# Glob patterns for test file discovery. All matching files are run.
+# Default mirrors the common Neovim plugin convention of test/**/*_spec.lua.
+test_patterns = ["test/**/*_spec.lua"]
+
+# Directory where coverage report files are written.
+coverage_dir = "coverage"
+
+# Report formats to emit after the test run.
+# Options: "console" | "lcov" | "cobertura" | "coveralls" | "junit"
+# Multiple formats may be listed.
+formats = ["console", "lcov"]
+
+# Patch the coverage badge in README.md after each run.
+badge_patch = false
+
+# Path to the README file when badge_patch = true.
+readme_path = "README.md"
+
+# Minimum required coverage percentage.
+# A non-zero value causes neospec to exit with a non-zero status when coverage
+# falls below this threshold. Useful for CI gates.
+# threshold = 80.0
+
+# Directory where downloaded Neovim binaries are cached.
+# Defaults to the platform cache directory: ~/.cache/neospec (Linux/macOS)
+# or %LOCALAPPDATA%\neospec (Windows).
+# cache_dir = "~/.cache/neospec"
+
+# Enable verbose output (equivalent to --verbose / -v flag).
+verbose = false

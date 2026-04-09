@@ -1,0 +1,23 @@
+# Binaries
+/neospec
+/neospec.exe
+dist/
+
+# Coverage output (generated)
+coverage/
+
+# Go build cache
+*.test
+*.out
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# neospec config (users create their own)
+# neospec.toml is intentionally NOT ignored — it may be committed by plugin authors
