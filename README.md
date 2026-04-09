@@ -5,6 +5,8 @@
 **A self-contained test runner and coverage tool for Neovim plugins and distributions.**
 
 [![CI](https://github.com/jedi-knights/neospec/actions/workflows/ci.yml/badge.svg)](https://github.com/jedi-knights/neospec/actions/workflows/ci.yml)
+[![Release](https://github.com/jedi-knights/neospec/actions/workflows/release.yml/badge.svg)](https://github.com/jedi-knights/neospec/actions/workflows/release.yml)
+[![GoReleaser](https://github.com/jedi-knights/neospec/actions/workflows/goreleaser.yml/badge.svg)](https://github.com/jedi-knights/neospec/actions/workflows/goreleaser.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/jedi-knights/neospec)](https://goreportcard.com/report/github.com/jedi-knights/neospec)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 ![coverage](https://img.shields.io/badge/coverage-0.0%25-red)
