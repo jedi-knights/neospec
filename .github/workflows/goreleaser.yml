@@ -23,6 +23,7 @@ jobs:
         with:
           # GoReleaser needs full history to generate a correct changelog.
           fetch-depth: 0
+          token: ${{ secrets.GH_TOKEN }}
 
       - uses: actions/setup-go@v5
         with:
