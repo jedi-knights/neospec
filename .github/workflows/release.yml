@@ -28,6 +28,6 @@ jobs:
           # Full history is required for commit analysis across all tags.
           fetch-depth: 0
 
-      - uses: jedi-knights/go-semantic-release@v1
+      - uses: jedi-knights/go-semantic-release@v0
         with:
           github_token: ${{ secrets.GH_TOKEN }}
