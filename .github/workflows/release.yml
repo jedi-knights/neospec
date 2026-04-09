@@ -30,4 +30,4 @@ jobs:
 
       - uses: jedi-knights/go-semantic-release@v1
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ secrets.GH_TOKEN }}
