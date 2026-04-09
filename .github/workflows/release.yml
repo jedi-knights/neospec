@@ -1,18 +1,16 @@
 name: Release
 
-# Runs on every push to main. go-semantic-release analyzes conventional
+# Runs after CI passes on main. go-semantic-release analyzes conventional
 # commits since the last tag to determine whether a release is warranted,
 # and if so, computes the next semantic version, writes CHANGELOG.md and
 # VERSION, creates the git tag, and pushes back to main with [skip ci].
 # The resulting v* tag then triggers goreleaser.yml for binary distribution.
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
-    paths-ignore:
-      - "CHANGELOG.md"
-      - "VERSION"
-      - "README.md"
 
 permissions:
   contents: write
@@ -21,6 +19,8 @@ jobs:
   release:
     name: Semantic Release
     runs-on: ubuntu-latest
+    # Only run when CI passed — skip if it failed or was cancelled.
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
 
     steps:
       - uses: actions/checkout@v4
