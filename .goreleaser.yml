@@ -31,10 +31,10 @@ builds:
 
 archives:
   - id: neospec
-    builds: [neospec]
+    ids: [neospec]
     # neospec_0.1.0_linux_amd64.tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    format: tar.gz
+    formats: [tar.gz]
     format_overrides:
       - goos: windows
         formats: [zip]
