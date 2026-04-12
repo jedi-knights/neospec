@@ -43,7 +43,7 @@ jobs:
         run: |
           go install github.com/boumenot/gocover-cobertura@latest
           go test -race -count=1 -coverprofile=coverage.out ./...
-          gocover-cobertura < coverage.out > coverage.xml
+          gocover-cobertura < coverage.out | grep -v '<!DOCTYPE' > coverage.xml
           mkdir -p htmlcov
           go tool cover -html=coverage.out -o htmlcov/index.html
         shell: bash
