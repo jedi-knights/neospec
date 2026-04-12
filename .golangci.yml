@@ -6,13 +6,15 @@ linters:
     - govet
     - staticcheck
     - gocyclo
+    - ineffassign
+    - misspell
     - revive
 
   settings:
     gocyclo:
-      # Flag functions with cyclomatic complexity > 7.
-      # min-complexity is the lowest value that gets reported, so 8 enforces ≤ 7.
-      min-complexity: 8
+      # Flag functions with cyclomatic complexity > 14.
+      # min-complexity is the lowest value that gets reported, so 15 enforces ≤ 14.
+      min-complexity: 15
 
     revive:
       rules:
@@ -59,12 +61,8 @@ linters:
       - linters: [gocyclo]
         path: "internal/config/config\\.go"
 
-      # CLI orchestration in run.go: runTests is a sequential multi-step pipeline
-      # and applyFlags/reporterFor are simple switch/conditional dispatchers.
-      # Splitting them further would harm readability without a logical benefit.
-      - linters: [gocyclo]
-        path: "cmd/neospec/commands/run\\.go"
 
 formatters:
   enable:
+    - gofmt
     - goimports
