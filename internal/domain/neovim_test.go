@@ -40,6 +40,49 @@ func TestParseVersion(t *testing.T) {
 	}
 }
 
+func TestVersionString(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"stable", "stable"},
+		{"nightly", "nightly"},
+		{"v0.10.4", "v0.10.4"},
+		{"0.10.4", "v0.10.4"}, // ParseVersion adds "v" prefix
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.input, func(t *testing.T) {
+			v, err := domain.ParseVersion(tc.input)
+			if err != nil {
+				t.Fatalf("ParseVersion(%q) error: %v", tc.input, err)
+			}
+			if got := v.String(); got != tc.want {
+				t.Errorf("String() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBinaryName(t *testing.T) {
+	tests := []struct {
+		platform domain.Platform
+		want     string
+	}{
+		{domain.Platform{OS: domain.OSLinux, Arch: domain.ArchAMD64}, "nvim"},
+		{domain.Platform{OS: domain.OSDarwin, Arch: domain.ArchARM64}, "nvim"},
+		{domain.Platform{OS: domain.OSWindows, Arch: domain.ArchAMD64}, "nvim.exe"},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.platform.String(), func(t *testing.T) {
+			if got := domain.BinaryName(tc.platform); got != tc.want {
+				t.Errorf("BinaryName(%s) = %q, want %q", tc.platform, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestVersionAssetName(t *testing.T) {
 	v, _ := domain.ParseVersion("stable")
 	tests := []struct {
@@ -51,6 +94,7 @@ func TestVersionAssetName(t *testing.T) {
 		{domain.Platform{OS: domain.OSDarwin, Arch: domain.ArchAMD64}, "nvim-macos-x86_64.tar.gz"},
 		{domain.Platform{OS: domain.OSDarwin, Arch: domain.ArchARM64}, "nvim-macos-x86_64.tar.gz"},
 		{domain.Platform{OS: domain.OSWindows, Arch: domain.ArchAMD64}, "nvim-win64.zip"},
+		{domain.Platform{OS: domain.OS("freebsd"), Arch: domain.ArchAMD64}, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.platform.String(), func(t *testing.T) {
