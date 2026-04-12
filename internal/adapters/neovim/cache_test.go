@@ -341,6 +341,51 @@ func TestCache_Extract_TarGz_RootLevelEntry(t *testing.T) {
 	}
 }
 
+// TestCache_Extract_Zip_WriteDirConflict exercises the writeErr path in extractZip.
+// The archive contains a directory entry "foo/" followed by a file entry "foo"
+// with the same stripped name. When extractZip creates the directory first and
+// then tries to open a file at the same path, os.OpenFile returns "is a directory"
+// and writeErr is returned.
+func TestCache_Extract_Zip_WriteDirConflict(t *testing.T) {
+	cacheDir := t.TempDir()
+	c := neovim.NewCache(cacheDir)
+	v, _ := domain.ParseVersion("stable")
+	p := domain.Platform{OS: domain.OSWindows, Arch: domain.ArchAMD64}
+
+	archivePath := filepath.Join(t.TempDir(), "conflict.zip")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatalf("create archive: %v", err)
+	}
+	zw := zip.NewWriter(f)
+	// Directory entry — after stripping first component: "foo/"
+	zw.Create("nvim-win64/foo/")
+	// File entry with same stripped name — target will be an existing directory
+	w, _ := zw.Create("nvim-win64/foo")
+	w.Write([]byte("data"))
+	zw.Close()
+	f.Close()
+
+	_, err = c.Extract(v, p, archivePath)
+	if err == nil {
+		t.Error("Extract() expected error when file target is an existing directory")
+	}
+}
+
+func TestCache_Extract_TarGz_FileNotFound(t *testing.T) {
+	cacheDir := t.TempDir()
+	c := neovim.NewCache(cacheDir)
+	v, _ := domain.ParseVersion("stable")
+	p := domain.Platform{OS: domain.OSLinux, Arch: domain.ArchAMD64}
+
+	// Archive path that does not exist — os.Open inside extractTarGz returns an error.
+	nonexistentPath := filepath.Join(t.TempDir(), "does-not-exist.tar.gz")
+	_, err := c.Extract(v, p, nonexistentPath)
+	if err == nil {
+		t.Error("Extract() expected error for nonexistent archive path")
+	}
+}
+
 func TestCache_Extract_TarGz_MissingBinary(t *testing.T) {
 	cacheDir := t.TempDir()
 	c := neovim.NewCache(cacheDir)

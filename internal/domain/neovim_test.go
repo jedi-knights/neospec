@@ -94,6 +94,7 @@ func TestVersionAssetName(t *testing.T) {
 		{domain.Platform{OS: domain.OSDarwin, Arch: domain.ArchAMD64}, "nvim-macos-x86_64.tar.gz"},
 		{domain.Platform{OS: domain.OSDarwin, Arch: domain.ArchARM64}, "nvim-macos-x86_64.tar.gz"},
 		{domain.Platform{OS: domain.OSWindows, Arch: domain.ArchAMD64}, "nvim-win64.zip"},
+		{domain.Platform{OS: domain.OS("freebsd"), Arch: domain.ArchAMD64}, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.platform.String(), func(t *testing.T) {

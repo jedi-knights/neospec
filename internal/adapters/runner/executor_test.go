@@ -3,12 +3,21 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 
 	"github.com/jedi-knights/neospec/internal/adapters/sandbox"
 	"github.com/jedi-knights/neospec/internal/domain"
+	"github.com/jedi-knights/neospec/internal/ports"
 )
+
+// errorSandboxFactory is a SandboxFactory that always returns an error.
+type errorSandboxFactory struct{}
+
+func (f *errorSandboxFactory) Create(_ context.Context) (ports.Sandbox, error) {
+	return nil, fmt.Errorf("simulated sandbox creation failure")
+}
 
 func TestNew(t *testing.T) {
 	r := New("/usr/bin/nvim", sandbox.NewFactory(), false)
@@ -159,6 +168,24 @@ func TestRunner_Run_BadNvimPath_Verbose(t *testing.T) {
 	testFile := createTempLuaFile(t)
 	// Should not panic; verbose just prepends -V3 to args.
 	r.Run(context.Background(), []string{testFile}) //nolint:errcheck
+}
+
+// TestRunner_Run_SandboxError covers the runOne sandbox-creation failure path.
+// Run() records the error as a StatusError test result rather than returning it.
+func TestRunner_Run_SandboxError(t *testing.T) {
+	r := New("/usr/bin/nvim", &errorSandboxFactory{}, false)
+	testFile := createTempLuaFile(t)
+
+	suite, _, err := r.Run(context.Background(), []string{testFile})
+	if err != nil {
+		t.Fatalf("Run() should not return error (sandbox errors are recorded in suite): %v", err)
+	}
+	if len(suite.Tests) != 1 {
+		t.Fatalf("expected 1 test result, got %d", len(suite.Tests))
+	}
+	if suite.Tests[0].Status != domain.StatusError {
+		t.Errorf("expected StatusError, got %v", suite.Tests[0].Status)
+	}
 }
 
 func createTempLuaFile(t *testing.T) string {

@@ -173,6 +173,22 @@ func TestEmitReports_UnknownFormat(t *testing.T) {
 	}
 }
 
+func TestReporterFor_FileFormats_CreateError(t *testing.T) {
+	// A nonexistent directory causes os.Create to fail for all file-based formats.
+	cfg := config.Config{CoverageDir: "/nonexistent/path/that/does/not/exist"}
+
+	formats := []string{"lcov", "cobertura", "coveralls", "junit"}
+	for _, format := range formats {
+		format := format
+		t.Run(format, func(t *testing.T) {
+			_, _, err := reporterFor(format, cfg, false)
+			if err == nil {
+				t.Errorf("reporterFor(%q) expected error for nonexistent dir, got nil", format)
+			}
+		})
+	}
+}
+
 func TestNewRunCmd(t *testing.T) {
 	cmd := NewRunCmd()
 	if cmd == nil {

@@ -162,6 +162,17 @@ func TestLoad_EnvVarOverrides(t *testing.T) {
 	}
 }
 
+// TestLoad_TOMLReadError checks that a non-NotExist error from reading the TOML
+// file is propagated. Passing a directory path causes os.ReadFile to fail with
+// an error that is not os.IsNotExist, triggering the error return in loadTOML.
+func TestLoad_TOMLReadError(t *testing.T) {
+	dir := t.TempDir()
+	_, err := Load(dir) // directory path, not a file — os.ReadFile returns an error
+	if err == nil {
+		t.Error("Load() on a directory path should return error")
+	}
+}
+
 // TestLoad_EnvVerboseFlagOne checks that NEOSPEC_VERBOSE=1 enables verbose mode.
 func TestLoad_EnvVerboseFlagOne(t *testing.T) {
 	t.Setenv("NEOSPEC_VERBOSE", "1")

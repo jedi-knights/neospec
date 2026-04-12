@@ -103,6 +103,26 @@ func TestListCache_ReadDirError(t *testing.T) {
 	}
 }
 
+func TestNewCacheCleanCmd_RunE(t *testing.T) {
+	// Set the cache dir env var so config.Load picks it up instead of the default.
+	t.Setenv("NEOSPEC_CACHE_DIR", t.TempDir())
+
+	cmd := newCacheCleanCmd()
+	if err := cmd.RunE(cmd, nil); err != nil {
+		t.Errorf("newCacheCleanCmd().RunE() unexpected error: %v", err)
+	}
+}
+
+func TestNewCacheListCmd_RunE(t *testing.T) {
+	// Set the cache dir env var so config.Load picks it up instead of the default.
+	t.Setenv("NEOSPEC_CACHE_DIR", t.TempDir())
+
+	cmd := newCacheListCmd()
+	if err := cmd.RunE(cmd, nil); err != nil {
+		t.Errorf("newCacheListCmd().RunE() unexpected error: %v", err)
+	}
+}
+
 func TestNewCacheCmd(t *testing.T) {
 	cmd := NewCacheCmd()
 	if cmd == nil {
