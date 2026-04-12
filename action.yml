@@ -47,6 +47,8 @@ runs:
   steps:
     - name: Download neospec
       shell: bash
+      env:
+        ACTION_REF: ${{ github.action_ref }}
       run: |
         set -euo pipefail
 
@@ -59,11 +61,11 @@ runs:
         esac
 
         # Resolve the version to install.
-        # GITHUB_ACTION_REF is set by the runner to the ref used to call this
-        # action (e.g. "v0.1.3" or "v0"). Accept only a full semver tag; for
-        # everything else (branch names, SHAs, moving major tags) fall back to
-        # the latest published release so callers always get a real binary.
-        VERSION="${GITHUB_ACTION_REF:-}"
+        # github.action_ref is the ref used to call this action (e.g. "v0.1.4"
+        # or "v0"). Accept only a full semver tag; for everything else (branch
+        # names, SHAs, moving major tags) fall back to the latest published
+        # release so callers always get a real binary.
+        VERSION="${ACTION_REF:-}"
         if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
           VERSION="$(curl -fsSL \
             -H "Accept: application/vnd.github+json" \
