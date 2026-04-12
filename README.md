@@ -7,7 +7,7 @@
 [![CI](https://github.com/jedi-knights/neospec/actions/workflows/ci.yml/badge.svg)](https://github.com/jedi-knights/neospec/actions/workflows/ci.yml)
 [![Release](https://github.com/jedi-knights/neospec/actions/workflows/release.yml/badge.svg)](https://github.com/jedi-knights/neospec/actions/workflows/release.yml)
 [![GoReleaser](https://github.com/jedi-knights/neospec/actions/workflows/goreleaser.yml/badge.svg)](https://github.com/jedi-knights/neospec/actions/workflows/goreleaser.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/jedi-knights/neospec)](https://goreportcard.com/report/github.com/jedi-knights/neospec)
+[![Go Report](https://goreportcard.com/badge/github.com/jedi-knights/neospec?style=flat)](https://goreportcard.com/report/github.com/jedi-knights/neospec)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 ![coverage](https://img.shields.io/badge/coverage-0.0%25-red)
 
@@ -89,8 +89,6 @@ neospec run --format=console --format=lcov --threshold=80
 # Pin a specific Neovim version
 neospec run --neovim-version=v0.10.4
 
-# Patch the coverage badge in README.md after each run
-neospec run --badge
 ```
 
 ## Writing Tests
@@ -199,16 +197,6 @@ Multiple formats can be enabled simultaneously:
 neospec run --format=console --format=lcov --format=junit
 ```
 
-### Coverage badge
-
-Add a placeholder badge to your README:
-
-```markdown
-![coverage](https://img.shields.io/badge/coverage-0.0%25-red)
-```
-
-Then run with `--badge` (or set `badge_patch = true` in `neospec.toml`). neospec will replace the badge URL after each run, keeping the percentage and color current.
-
 ### Coverage threshold
 
 Fail the run when coverage falls below a minimum:
@@ -239,8 +227,8 @@ jobs:
           neovim-version: stable      # stable | nightly | v0.10.4
           formats: console,lcov       # comma-separated
           threshold: "80"             # fail if coverage < 80%
-          badge-patch: "true"         # update README badge
 
+      - uses: jedi-knights/coverage-badge@v1   # update README badge
 ```
 
 ### Action inputs
@@ -251,8 +239,6 @@ jobs:
 | `test-patterns` | `test/**/*_spec.lua` | Comma-separated glob patterns for test discovery |
 | `coverage-dir` | `coverage` | Directory for coverage report files |
 | `formats` | `console` | Comma-separated output formats |
-| `badge-patch` | `false` | Patch the coverage badge in README.md |
-| `readme-path` | `README.md` | Path to README for badge patching |
 | `threshold` | `0` | Minimum coverage percentage; `0` disables the check |
 | `verbose` | `false` | Enable verbose output |
 
@@ -265,8 +251,6 @@ neovim_version = "stable"
 test_patterns  = ["test/**/*_spec.lua"]
 coverage_dir   = "coverage"
 formats        = ["console", "lcov"]
-badge_patch    = true
-readme_path    = "README.md"
 threshold      = 80.0
 verbose        = false
 ```
@@ -287,8 +271,6 @@ CLI flags  >  environment variables  >  neospec.toml  >  built-in defaults
 | `NEOSPEC_TEST_PATTERNS` | Comma-separated glob patterns |
 | `NEOSPEC_COVERAGE_DIR` | Coverage output directory |
 | `NEOSPEC_FORMATS` | Comma-separated format list |
-| `NEOSPEC_BADGE_PATCH` | `true` or `1` to enable badge patching |
-| `NEOSPEC_README_PATH` | README path for badge patching |
 | `NEOSPEC_VERBOSE` | `true` or `1` for verbose output |
 
 ## CLI reference
@@ -308,8 +290,6 @@ Flags (run):
       --pattern stringArray     glob pattern(s) for test files (repeatable)
       --format stringArray      output format(s) (repeatable)
       --coverage-dir string     directory for coverage report files
-      --badge                   patch coverage badge in README.md
-      --readme string           path to README for badge patching
       --threshold float         minimum coverage percentage
       --cache-dir string        directory for cached Neovim binaries
   -v, --verbose                 verbose output
@@ -420,7 +400,6 @@ internal/
     sandbox/                Per-run XDG environment isolation
     runner/                 Test file discovery and Neovim subprocess execution
     reporter/               LCOV, Cobertura, JUnit, console
-    badge/                  README coverage badge patching
 
 internal/adapters/runner/lua/
   harness.lua               describe / it / before_each / after_each / assert.*
