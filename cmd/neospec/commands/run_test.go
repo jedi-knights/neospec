@@ -585,7 +585,7 @@ func TestRunTests_InitFileThreadedToRunner(t *testing.T) {
 	flags := &runFlags{initFile: "tests/init.lua"}
 	deps := runDeps{
 		neovimProvider: &fakeNeovimProvider{path: "/fake/nvim"},
-		runnerFactory: func(_ string, _ bool, initFile string) ports.TestRunner {
+		runnerFactory: func(_ string, _ bool, initFile string, _ []string) ports.TestRunner {
 			factoryCalled = true
 			capturedInitFile = initFile
 			return &fakeTestRunner{files: []string{}}
@@ -602,6 +602,38 @@ func TestRunTests_InitFileThreadedToRunner(t *testing.T) {
 	}
 	if capturedInitFile != "tests/init.lua" {
 		t.Errorf("initFile = %q, want %q", capturedInitFile, "tests/init.lua")
+	}
+}
+
+// TestRunTests_CoverageIncludeThreadedToRunner verifies that cfg.CoverageInclude
+// is passed through to the runner constructor so the coverage hook only records
+// files matching the specified path patterns.
+func TestRunTests_CoverageIncludeThreadedToRunner(t *testing.T) {
+	var capturedCoverageInclude []string
+	var factoryCalled bool
+	flags := &runFlags{coverageInclude: []string{"lua/", "plugin/"}}
+	deps := runDeps{
+		neovimProvider: &fakeNeovimProvider{path: "/fake/nvim"},
+		runnerFactory: func(_ string, _ bool, _ string, coverageInclude []string) ports.TestRunner {
+			factoryCalled = true
+			capturedCoverageInclude = coverageInclude
+			return &fakeTestRunner{files: []string{}}
+		},
+	}
+	if err := runTests(context.Background(), flags, deps); err != nil {
+		t.Fatalf("runTests() unexpected error: %v", err)
+	}
+	if !factoryCalled {
+		t.Fatal("runnerFactory was never called")
+	}
+	want := []string{"lua/", "plugin/"}
+	if len(capturedCoverageInclude) != len(want) {
+		t.Fatalf("coverageInclude len = %d, want %d; got %v", len(capturedCoverageInclude), len(want), capturedCoverageInclude)
+	}
+	for i, v := range want {
+		if capturedCoverageInclude[i] != v {
+			t.Errorf("coverageInclude[%d] = %q, want %q", i, capturedCoverageInclude[i], v)
+		}
 	}
 }
 

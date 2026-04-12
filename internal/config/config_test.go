@@ -445,6 +445,7 @@ func TestLoad_InitFileEnvVar(t *testing.T) {
 	for _, key := range []string{
 		"NEOSPEC_NEOVIM_VERSION", "NEOSPEC_TEST_PATTERNS", "NEOSPEC_COVERAGE_DIR",
 		"NEOSPEC_FORMATS", "NEOSPEC_CACHE_DIR", "NEOSPEC_VERBOSE", "NEOSPEC_THRESHOLD",
+		"NEOSPEC_COVERAGE_INCLUDE",
 	} {
 		t.Setenv(key, "")
 	}
@@ -456,5 +457,51 @@ func TestLoad_InitFileEnvVar(t *testing.T) {
 	}
 	if cfg.InitFile != "/env/init.lua" {
 		t.Errorf("InitFile = %q, want %q", cfg.InitFile, "/env/init.lua")
+	}
+}
+
+// TestLoad_CoverageIncludeDefault checks that CoverageInclude defaults to nil
+// (no filtering — all project sources are recorded).
+func TestLoad_CoverageIncludeDefault(t *testing.T) {
+	for _, key := range []string{
+		"NEOSPEC_NEOVIM_VERSION", "NEOSPEC_TEST_PATTERNS", "NEOSPEC_COVERAGE_DIR",
+		"NEOSPEC_FORMATS", "NEOSPEC_CACHE_DIR", "NEOSPEC_VERBOSE", "NEOSPEC_INIT_FILE",
+		"NEOSPEC_THRESHOLD", "NEOSPEC_COVERAGE_INCLUDE",
+	} {
+		t.Setenv(key, "")
+	}
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if len(cfg.CoverageInclude) != 0 {
+		t.Errorf("CoverageInclude = %v, want empty (nil) by default", cfg.CoverageInclude)
+	}
+}
+
+// TestLoad_CoverageIncludeEnvVar checks that NEOSPEC_COVERAGE_INCLUDE is parsed
+// as a comma-separated list of path patterns, with whitespace trimmed.
+func TestLoad_CoverageIncludeEnvVar(t *testing.T) {
+	for _, key := range []string{
+		"NEOSPEC_NEOVIM_VERSION", "NEOSPEC_TEST_PATTERNS", "NEOSPEC_COVERAGE_DIR",
+		"NEOSPEC_FORMATS", "NEOSPEC_CACHE_DIR", "NEOSPEC_VERBOSE", "NEOSPEC_INIT_FILE",
+		"NEOSPEC_THRESHOLD",
+	} {
+		t.Setenv(key, "")
+	}
+	t.Setenv("NEOSPEC_COVERAGE_INCLUDE", "lua/, plugin/")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	want := []string{"lua/", "plugin/"}
+	if len(cfg.CoverageInclude) != len(want) {
+		t.Fatalf("CoverageInclude len = %d, want %d; got %v", len(cfg.CoverageInclude), len(want), cfg.CoverageInclude)
+	}
+	for i, v := range want {
+		if cfg.CoverageInclude[i] != v {
+			t.Errorf("CoverageInclude[%d] = %q, want %q", i, cfg.CoverageInclude[i], v)
+		}
 	}
 }

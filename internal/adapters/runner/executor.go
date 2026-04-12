@@ -20,11 +20,12 @@ import (
 
 // Runner executes test files in headless Neovim subprocesses.
 type Runner struct {
-	nvimPath string
-	sandboxF ports.SandboxFactory
-	exec     ports.CommandRunner
-	verbose  bool
-	initFile string
+	nvimPath        string
+	sandboxF        ports.SandboxFactory
+	exec            ports.CommandRunner
+	verbose         bool
+	initFile        string
+	coverageInclude []string
 }
 
 // New creates a Runner.
@@ -35,20 +36,24 @@ type Runner struct {
 //   - initFile: optional path to a Lua file executed before the coverage hook and
 //     test harness. When non-empty, its dofile() call is the very first line of
 //     the generated shim so the init file runs outside of coverage instrumentation.
-func New(nvimPath string, sandboxF ports.SandboxFactory, exec ports.CommandRunner, verbose bool, initFile string) *Runner {
+//   - coverageInclude: optional list of path substrings. When non-empty, the
+//     coverage hook only records source files whose path contains at least one
+//     of these strings, restricting coverage to the plugin's own source tree.
+func New(nvimPath string, sandboxF ports.SandboxFactory, exec ports.CommandRunner, verbose bool, initFile string, coverageInclude []string) *Runner {
 	return &Runner{
-		nvimPath: nvimPath,
-		sandboxF: sandboxF,
-		exec:     exec,
-		verbose:  verbose,
-		initFile: initFile,
+		nvimPath:        nvimPath,
+		sandboxF:        sandboxF,
+		exec:            exec,
+		verbose:         verbose,
+		initFile:        initFile,
+		coverageInclude: coverageInclude,
 	}
 }
 
 // NewWithDefaultSandbox creates a Runner using the standard XDG sandbox factory
 // and the real os/exec command runner. Use this in production code.
-func NewWithDefaultSandbox(nvimPath string, verbose bool, initFile string) *Runner {
-	return New(nvimPath, sandbox.NewFactory(), realCommandRunner{}, verbose, initFile)
+func NewWithDefaultSandbox(nvimPath string, verbose bool, initFile string, coverageInclude []string) *Runner {
+	return New(nvimPath, sandbox.NewFactory(), realCommandRunner{}, verbose, initFile, coverageInclude)
 }
 
 // Discover satisfies the discovery half of ports.TestRunner.
@@ -211,7 +216,7 @@ func (r *Runner) runOne(ctx context.Context, testFile string) (suite *domain.Sui
 
 	// Write the combined harness+hook Lua shim into the sandbox.
 	shimPath := filepath.Join(sb.Dir(), "neospec_run.lua")
-	shim, err := buildShim(testFile, r.initFile)
+	shim, err := buildShim(testFile, r.initFile, r.coverageInclude)
 	if err != nil {
 		return nil, nil, fmt.Errorf("building shim: %w", err)
 	}

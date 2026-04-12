@@ -41,6 +41,18 @@ local function is_project_source(source)
 	if path:find("reporter%.lua$") then
 		return false
 	end
+	-- When _neospec_coverage_include is set, only record files whose path
+	-- contains at least one of the listed substrings. This lets callers
+	-- restrict coverage to their plugin's own source tree and exclude
+	-- Neovim's internal runtime files.
+	if type(_neospec_coverage_include) == "table" and #_neospec_coverage_include > 0 then
+		for _, pattern in ipairs(_neospec_coverage_include) do
+			if path:find(pattern, 1, true) then
+				return true
+			end
+		end
+		return false
+	end
 	return true
 end
 
