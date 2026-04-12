@@ -6,13 +6,45 @@ import (
 	"strings"
 )
 
+// luaEscape escapes a string for safe embedding in a Lua double-quoted string
+// literal. It handles backslash, double-quote, newline, carriage return, and
+// tab — the characters most likely to appear in file paths and to produce
+// syntactically broken Lua if left unescaped. NUL bytes are not handled here;
+// callers must reject paths containing NUL before calling luaEscape (see
+// buildShim).
+func luaEscape(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	s = strings.ReplaceAll(s, "\n", `\n`)
+	s = strings.ReplaceAll(s, "\r", `\r`)
+	s = strings.ReplaceAll(s, "\t", `\t`)
+	return s
+}
+
 //go:embed lua/*.lua
 var luaFS embed.FS
 
 // buildShim constructs the Lua entry-point that is written into the sandbox
 // before each Neovim invocation. It concatenates the coverage hook and the
 // test harness, then appends the dofile() call for the actual test file.
-func buildShim(testFile string) ([]byte, error) {
+//
+// When initFile is non-empty, a dofile() call for it is prepended before the
+// coverage hook so that the init file runs before instrumentation starts and
+// is not itself included in coverage data.
+//
+// buildShim returns an error if either path contains a NUL byte. LuaJIT (used
+// by Neovim) truncates double-quoted strings at NUL, producing a silent
+// "file not found" rather than a clear diagnostic.
+func buildShim(testFile, initFile string) ([]byte, error) {
+	if testFile == "" {
+		return nil, fmt.Errorf("test file path must not be empty")
+	}
+	if strings.ContainsRune(testFile, 0) {
+		return nil, fmt.Errorf("test file path contains a NUL byte: %q", testFile)
+	}
+	if strings.ContainsRune(initFile, 0) {
+		return nil, fmt.Errorf("init file path contains a NUL byte: %q", initFile)
+	}
 	// The three error branches below are structurally unreachable. The //go:embed
 	// directive above causes a compile-time error if any of the named Lua files
 	// are missing from the source tree, so by the time the binary runs the files
@@ -34,14 +66,28 @@ func buildShim(testFile string) ([]byte, error) {
 	}
 
 	// Escape the test file path for embedding in a Lua string literal.
-	escaped := strings.ReplaceAll(testFile, `\`, `\\`)
-	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	escaped := luaEscape(testFile)
 
-	shim := string(hook) + "\n" +
-		string(harness) + "\n" +
-		string(reporter) + "\n" +
-		fmt.Sprintf(`dofile("%s")`+"\n", escaped) +
-		"_neospec_report()\n"
+	var sb strings.Builder
+	// Use 2× raw path lengths as an upper bound for escaped output (luaEscape
+	// at most doubles the length by escaping every character).
+	sb.Grow(len(hook) + len(harness) + len(reporter) + 2*len(initFile) + 2*len(testFile) + 128)
 
-	return []byte(shim), nil
+	if initFile != "" {
+		// fmt.Fprintf on a strings.Builder always returns a nil error (the
+		// builder's Write never fails). The return is intentionally ignored;
+		// golangci-lint's errcheck exempts strings.Builder writes for this reason.
+		fmt.Fprintf(&sb, `dofile("%s")`+"\n", luaEscape(initFile))
+	}
+
+	sb.Write(hook)
+	sb.WriteByte('\n')
+	sb.Write(harness)
+	sb.WriteByte('\n')
+	sb.Write(reporter)
+	sb.WriteByte('\n')
+	fmt.Fprintf(&sb, `dofile("%s")`+"\n", escaped)
+	sb.WriteString("_neospec_report()\n")
+
+	return []byte(sb.String()), nil
 }
