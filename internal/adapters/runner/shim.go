@@ -32,10 +32,15 @@ var luaFS embed.FS
 // coverage hook so that the init file runs before instrumentation starts and
 // is not itself included in coverage data.
 //
+// When coverageInclude is non-empty, a _neospec_coverage_include global is
+// emitted before the coverage hook. The hook reads this global and skips any
+// source file whose absolute path does not contain at least one of the listed
+// substrings, restricting coverage to the plugin's own source tree.
+//
 // buildShim returns an error if either path contains a NUL byte. LuaJIT (used
 // by Neovim) truncates double-quoted strings at NUL, producing a silent
 // "file not found" rather than a clear diagnostic.
-func buildShim(testFile, initFile string) ([]byte, error) {
+func buildShim(testFile, initFile string, coverageInclude []string) ([]byte, error) {
 	if testFile == "" {
 		return nil, fmt.Errorf("test file path must not be empty")
 	}
@@ -78,6 +83,17 @@ func buildShim(testFile, initFile string) ([]byte, error) {
 		// builder's Write never fails). The return is intentionally ignored;
 		// golangci-lint's errcheck exempts strings.Builder writes for this reason.
 		fmt.Fprintf(&sb, `dofile("%s")`+"\n", luaEscape(initFile))
+	}
+
+	if len(coverageInclude) > 0 {
+		sb.WriteString("_neospec_coverage_include = {")
+		for i, pattern := range coverageInclude {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			fmt.Fprintf(&sb, `"%s"`, luaEscape(pattern))
+		}
+		sb.WriteString("}\n")
 	}
 
 	sb.Write(hook)

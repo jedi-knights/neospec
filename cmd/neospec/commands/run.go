@@ -24,24 +24,25 @@ import (
 // testRunner bypasses runner construction entirely — use it when you only need
 // to control Discover/Run behaviour. runnerFactory intercepts the constructor
 // call itself, letting tests verify that the correct arguments (nvimPath,
-// verbose, initFile) are threaded through from config.
+// verbose, initFile, coverageInclude) are threaded through from config.
 type runDeps struct {
 	neovimProvider ports.NeovimProvider
 	testRunner     ports.TestRunner
-	runnerFactory  func(nvimPath string, verbose bool, initFile string) ports.TestRunner
+	runnerFactory  func(nvimPath string, verbose bool, initFile string, coverageInclude []string) ports.TestRunner
 }
 
 // runFlags holds values parsed from CLI flags for the run command.
 type runFlags struct {
-	configPath    string
-	neovimVersion string
-	patterns      []string
-	coverageDir   string
-	formats       []string
-	threshold     float64
-	cacheDir      string
-	verbose       bool
-	initFile      string
+	configPath      string
+	neovimVersion   string
+	patterns        []string
+	coverageDir     string
+	formats         []string
+	threshold       float64
+	cacheDir        string
+	verbose         bool
+	initFile        string
+	coverageInclude []string
 }
 
 // NewRunCmd builds the `neospec run` (and default) command.
@@ -67,6 +68,7 @@ func NewRunCmd() *cobra.Command {
 	f.StringVar(&flags.cacheDir, "cache-dir", "", "directory for cached Neovim binaries")
 	f.BoolVarP(&flags.verbose, "verbose", "v", false, "verbose output")
 	f.StringVar(&flags.initFile, "init-file", "", "path to a Lua file executed before the coverage hook (e.g. tests/minimal_init.lua)")
+	f.StringArrayVar(&flags.coverageInclude, "coverage-include", nil, "restrict coverage to files whose path contains this substring (repeatable; e.g. lua/)")
 
 	return cmd
 }
@@ -100,9 +102,9 @@ func runTests(ctx context.Context, flags *runFlags, deps runDeps) error {
 	tr := deps.testRunner
 	if tr == nil {
 		if deps.runnerFactory != nil {
-			tr = deps.runnerFactory(nvimPath, cfg.Verbose, cfg.InitFile)
+			tr = deps.runnerFactory(nvimPath, cfg.Verbose, cfg.InitFile, cfg.CoverageInclude)
 		} else {
-			tr = runner.NewWithDefaultSandbox(nvimPath, cfg.Verbose, cfg.InitFile)
+			tr = runner.NewWithDefaultSandbox(nvimPath, cfg.Verbose, cfg.InitFile, cfg.CoverageInclude)
 		}
 	}
 	suite, cov, err := executeTests(ctx, cfg, tr)
@@ -281,5 +283,8 @@ func applyFlags(cfg *config.Config, flags *runFlags) {
 	}
 	if flags.initFile != "" {
 		cfg.InitFile = flags.initFile
+	}
+	if len(flags.coverageInclude) > 0 {
+		cfg.CoverageInclude = flags.coverageInclude
 	}
 }

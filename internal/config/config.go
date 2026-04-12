@@ -38,6 +38,12 @@ type Config struct {
 	// not instrumented by the coverage hook because it executes before the hook
 	// is installed.
 	InitFile string `toml:"init_file"`
+	// CoverageInclude is an optional list of path substrings. When non-empty,
+	// only source files whose absolute path contains at least one of these
+	// strings are recorded. Use it to restrict coverage to your plugin's own
+	// source tree and exclude Neovim's internal runtime files.
+	// Example: coverage_include = ["lua/", "plugin/"]
+	CoverageInclude []string `toml:"coverage_include"`
 }
 
 // defaults returns a Config populated with built-in default values.
@@ -127,6 +133,9 @@ func applyEnv(cfg *Config) error {
 	}
 	if v := strings.TrimSpace(os.Getenv("NEOSPEC_INIT_FILE")); v != "" {
 		cfg.InitFile = v
+	}
+	if v := strings.TrimSpace(os.Getenv("NEOSPEC_COVERAGE_INCLUDE")); v != "" {
+		cfg.CoverageInclude = splitTrimmed(v, ",")
 	}
 	return nil
 }

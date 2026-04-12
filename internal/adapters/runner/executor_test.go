@@ -35,21 +35,21 @@ func (f *fakeCommandRunner) Run(_ context.Context, _ []string, _ string, _ ...st
 }
 
 func TestNew(t *testing.T) {
-	r := New("/usr/bin/nvim", sandbox.NewFactory(), realCommandRunner{}, false, "")
+	r := New("/usr/bin/nvim", sandbox.NewFactory(), realCommandRunner{}, false, "", nil)
 	if r == nil {
 		t.Fatal("New() returned nil")
 	}
 }
 
 func TestNewWithDefaultSandbox(t *testing.T) {
-	r := NewWithDefaultSandbox("/usr/bin/nvim", true, "")
+	r := NewWithDefaultSandbox("/usr/bin/nvim", true, "", nil)
 	if r == nil {
 		t.Fatal("NewWithDefaultSandbox() returned nil")
 	}
 }
 
 func TestRunner_Run_EmptyFiles(t *testing.T) {
-	r := New("/usr/bin/nvim", sandbox.NewFactory(), realCommandRunner{}, false, "")
+	r := New("/usr/bin/nvim", sandbox.NewFactory(), realCommandRunner{}, false, "", nil)
 	suite, cov, err := r.Run(context.Background(), []string{})
 	if err != nil {
 		t.Fatalf("Run() with empty files error: %v", err)
@@ -142,7 +142,7 @@ func TestParseOutput_InvalidJSON(t *testing.T) {
 }
 
 func TestRunner_Discover_Method(t *testing.T) {
-	r := New("/usr/bin/nvim", sandbox.NewFactory(), realCommandRunner{}, false, "")
+	r := New("/usr/bin/nvim", sandbox.NewFactory(), realCommandRunner{}, false, "", nil)
 	files, err := r.Discover(context.Background(), []string{"/nonexistent/**"})
 	if err != nil {
 		t.Fatalf("Runner.Discover() error: %v", err)
@@ -165,7 +165,7 @@ func TestRunner_Run_BadNvimPath(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			r := New("/nonexistent/nvim-binary-that-does-not-exist", sandbox.NewFactory(), realCommandRunner{}, tc.verbose, "")
+			r := New("/nonexistent/nvim-binary-that-does-not-exist", sandbox.NewFactory(), realCommandRunner{}, tc.verbose, "", nil)
 			testFile := createTempLuaFile(t)
 
 			suite, cov, err := r.Run(context.Background(), []string{testFile})
@@ -192,7 +192,7 @@ func TestRunner_Run_BadNvimPath(t *testing.T) {
 // TestRunner_Run_SandboxError covers the runOne sandbox-creation failure path.
 // Run() records the error as a StatusError test result rather than returning it.
 func TestRunner_Run_SandboxError(t *testing.T) {
-	r := New("/usr/bin/nvim", &errorSandboxFactory{}, realCommandRunner{}, false, "")
+	r := New("/usr/bin/nvim", &errorSandboxFactory{}, realCommandRunner{}, false, "", nil)
 	testFile := createTempLuaFile(t)
 
 	// Coverage is not asserted here — this test focuses on the error recording path.
@@ -219,7 +219,7 @@ func TestRunOne_FakeCommandRunner(t *testing.T) {
 		t.Fatalf("json.Marshal: %v", err)
 	}
 
-	r := New("/nvim", sandbox.NewFactory(), &fakeCommandRunner{stdout: raw}, false, "")
+	r := New("/nvim", sandbox.NewFactory(), &fakeCommandRunner{stdout: raw}, false, "", nil)
 	testFile := createTempLuaFile(t)
 
 	suite, cov, err := r.runOne(context.Background(), testFile)
@@ -240,7 +240,7 @@ func TestRunOne_FakeCommandRunner(t *testing.T) {
 // TestRunOne_FakeCommandRunner_Error tests the runOne error path when the
 // command runner returns a non-zero exit.
 func TestRunOne_FakeCommandRunner_Error(t *testing.T) {
-	r := New("/nvim", sandbox.NewFactory(), &fakeCommandRunner{err: fmt.Errorf("exit status 1")}, false, "")
+	r := New("/nvim", sandbox.NewFactory(), &fakeCommandRunner{err: fmt.Errorf("exit status 1")}, false, "", nil)
 	testFile := createTempLuaFile(t)
 
 	_, _, err := r.runOne(context.Background(), testFile)
@@ -291,7 +291,7 @@ func TestRunner_Run_Success(t *testing.T) {
 		t.Fatalf("json.Marshal: %v", err)
 	}
 
-	r := New("/nvim", sandbox.NewFactory(), &fakeCommandRunner{stdout: raw}, false, "")
+	r := New("/nvim", sandbox.NewFactory(), &fakeCommandRunner{stdout: raw}, false, "", nil)
 	testFile := createTempLuaFile(t)
 
 	suite, cov, err := r.Run(context.Background(), []string{testFile})
@@ -316,7 +316,7 @@ func TestRunOne_WriteFileError(t *testing.T) {
 	// os.WriteFile("…/neospec_run.lua") fails.
 	nonexistentDir := filepath.Join(t.TempDir(), "deeply", "nonexistent", "dir")
 	sb := &fakeSandbox{dir: nonexistentDir}
-	r := New("/nvim", &fakeSandboxFactory{sb: sb}, &fakeCommandRunner{}, false, "")
+	r := New("/nvim", &fakeSandboxFactory{sb: sb}, &fakeCommandRunner{}, false, "", nil)
 	testFile := createTempLuaFile(t)
 
 	_, _, err := r.runOne(context.Background(), testFile)
@@ -338,7 +338,7 @@ func TestRunner_Run_MultipleFiles(t *testing.T) {
 		t.Fatalf("json.Marshal: %v", err)
 	}
 
-	r := New("/nvim", sandbox.NewFactory(), &fakeCommandRunner{stdout: raw}, false, "")
+	r := New("/nvim", sandbox.NewFactory(), &fakeCommandRunner{stdout: raw}, false, "", nil)
 	files := []string{
 		createTempLuaFile(t),
 		createTempLuaFile(t),
@@ -377,7 +377,7 @@ func TestRunner_Run_MultipleFiles_PartialError(t *testing.T) {
 	mixedFactory := &countingSandboxFactory{
 		factories: []ports.SandboxFactory{successFactory, errorFactory, successFactory},
 	}
-	r := New("/nvim", mixedFactory, &fakeCommandRunner{stdout: goodRaw}, false, "")
+	r := New("/nvim", mixedFactory, &fakeCommandRunner{stdout: goodRaw}, false, "", nil)
 	files := []string{
 		createTempLuaFile(t),
 		createTempLuaFile(t),
@@ -436,7 +436,7 @@ func TestRunner_Run_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel before Run is called
 
-	r := New("/nvim", sandbox.NewFactory(), &fakeCommandRunner{stdout: raw}, false, "")
+	r := New("/nvim", sandbox.NewFactory(), &fakeCommandRunner{stdout: raw}, false, "", nil)
 	files := []string{createTempLuaFile(t), createTempLuaFile(t)}
 
 	_, _, err = r.Run(ctx, files)
@@ -468,7 +468,7 @@ func TestRunOne_CloseError(t *testing.T) {
 		t.Fatalf("json.Marshal: %v", err)
 	}
 	sb := &closingErrorSandbox{fakeSandbox{dir: t.TempDir()}}
-	r := New("/nvim", &fakeSandboxFactory{sb: sb}, &fakeCommandRunner{stdout: raw}, false, "")
+	r := New("/nvim", &fakeSandboxFactory{sb: sb}, &fakeCommandRunner{stdout: raw}, false, "", nil)
 
 	_, _, err = r.runOne(context.Background(), createTempLuaFile(t))
 	if err == nil {
@@ -492,7 +492,7 @@ func TestRunner_Run_CloseError(t *testing.T) {
 		t.Fatalf("json.Marshal: %v", err)
 	}
 	sb := &closingErrorSandbox{fakeSandbox{dir: t.TempDir()}}
-	r := New("/nvim", &fakeSandboxFactory{sb: sb}, &fakeCommandRunner{stdout: raw}, false, "")
+	r := New("/nvim", &fakeSandboxFactory{sb: sb}, &fakeCommandRunner{stdout: raw}, false, "", nil)
 
 	suite, _, err := r.Run(context.Background(), []string{createTempLuaFile(t)})
 	if err != nil {
