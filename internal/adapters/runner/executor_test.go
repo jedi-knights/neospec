@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/jedi-knights/neospec/internal/adapters/sandbox"
@@ -19,8 +20,19 @@ func (f *errorSandboxFactory) Create(_ context.Context) (ports.Sandbox, error) {
 	return nil, fmt.Errorf("simulated sandbox creation failure")
 }
 
+// fakeCommandRunner is a CommandRunner that returns a canned stdout payload
+// without invoking any real subprocess. Used to test runOne success/error paths.
+type fakeCommandRunner struct {
+	stdout []byte
+	err    error
+}
+
+func (f *fakeCommandRunner) Run(_ context.Context, _ []string, _ string, _ ...string) ([]byte, []byte, error) {
+	return f.stdout, nil, f.err
+}
+
 func TestNew(t *testing.T) {
-	r := New("/usr/bin/nvim", sandbox.NewFactory(), false)
+	r := New("/usr/bin/nvim", sandbox.NewFactory(), realCommandRunner{}, false)
 	if r == nil {
 		t.Fatal("New() returned nil")
 	}
@@ -34,7 +46,7 @@ func TestNewWithDefaultSandbox(t *testing.T) {
 }
 
 func TestRunner_Run_EmptyFiles(t *testing.T) {
-	r := New("/usr/bin/nvim", sandbox.NewFactory(), false)
+	r := New("/usr/bin/nvim", sandbox.NewFactory(), realCommandRunner{}, false)
 	suite, cov, err := r.Run(context.Background(), []string{})
 	if err != nil {
 		t.Fatalf("Run() with empty files error: %v", err)
@@ -83,7 +95,10 @@ func TestParseOutput_ValidJSON(t *testing.T) {
 			{Path: "lua/mod.lua", Lines: map[string]int{"1": 3, "5": 0}},
 		},
 	}
-	raw, _ := json.Marshal(data)
+	raw, err := json.Marshal(data)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
 
 	suite, cov, err := parseOutput(raw)
 	if err != nil {
@@ -125,7 +140,7 @@ func TestParseOutput_InvalidJSON(t *testing.T) {
 }
 
 func TestRunner_Discover_Method(t *testing.T) {
-	r := New("/usr/bin/nvim", sandbox.NewFactory(), false)
+	r := New("/usr/bin/nvim", sandbox.NewFactory(), realCommandRunner{}, false)
 	files, err := r.Discover(context.Background(), []string{"/nonexistent/**"})
 	if err != nil {
 		t.Fatalf("Runner.Discover() error: %v", err)
@@ -135,45 +150,47 @@ func TestRunner_Discover_Method(t *testing.T) {
 	}
 }
 
-// TestRunner_Run_BadNvimPath tests the error path in Run when the nvim binary
-// does not exist. runOne returns an error which Run records as a test failure.
+// TestRunner_Run_BadNvimPath tests that when the nvim binary does not exist,
+// Run records the failure as a StatusError test result rather than returning
+// an error itself. The verbose sub-case also exercises the -V3 args prepend.
 func TestRunner_Run_BadNvimPath(t *testing.T) {
-	r := New("/nonexistent/nvim-binary-that-does-not-exist", sandbox.NewFactory(), false)
+	tests := []struct {
+		name    string
+		verbose bool
+	}{
+		{"non-verbose", false},
+		{"verbose prepends -V3", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := New("/nonexistent/nvim-binary-that-does-not-exist", sandbox.NewFactory(), realCommandRunner{}, tc.verbose)
+			testFile := createTempLuaFile(t)
 
-	// Create a real file to pass as a test file.
-	testFile := createTempLuaFile(t)
-
-	suite, cov, err := r.Run(context.Background(), []string{testFile})
-	if err != nil {
-		t.Fatalf("Run() should not return error (errors are recorded in suite): %v", err)
+			suite, cov, err := r.Run(context.Background(), []string{testFile})
+			if err != nil {
+				t.Fatalf("Run() should not return error (errors are recorded in suite): %v", err)
+			}
+			if suite == nil {
+				t.Fatal("Run() returned nil suite")
+			}
+			if cov == nil {
+				t.Fatal("Run() returned nil cov")
+			}
+			// The failed nvim execution is recorded as a test error, not a Run error.
+			if len(suite.Tests) != 1 {
+				t.Errorf("expected 1 error test result, got %d", len(suite.Tests))
+			}
+			if suite.Tests[0].Status != domain.StatusError {
+				t.Errorf("expected StatusError, got %v", suite.Tests[0].Status)
+			}
+		})
 	}
-	if suite == nil {
-		t.Fatal("Run() returned nil suite")
-	}
-	if cov == nil {
-		t.Fatal("Run() returned nil cov")
-	}
-	// The failed nvim execution is recorded as a test error, not a Run error.
-	if len(suite.Tests) != 1 {
-		t.Errorf("expected 1 error test result, got %d", len(suite.Tests))
-	}
-	if suite.Tests[0].Status != domain.StatusError {
-		t.Errorf("expected StatusError, got %v", suite.Tests[0].Status)
-	}
-}
-
-// TestRunner_Run_BadNvimPath_Verbose tests the verbose path in runOne.
-func TestRunner_Run_BadNvimPath_Verbose(t *testing.T) {
-	r := New("/nonexistent/nvim-binary-verbose", sandbox.NewFactory(), true)
-	testFile := createTempLuaFile(t)
-	// Should not panic; verbose just prepends -V3 to args.
-	r.Run(context.Background(), []string{testFile}) //nolint:errcheck
 }
 
 // TestRunner_Run_SandboxError covers the runOne sandbox-creation failure path.
 // Run() records the error as a StatusError test result rather than returning it.
 func TestRunner_Run_SandboxError(t *testing.T) {
-	r := New("/usr/bin/nvim", &errorSandboxFactory{}, false)
+	r := New("/usr/bin/nvim", &errorSandboxFactory{}, realCommandRunner{}, false)
 	testFile := createTempLuaFile(t)
 
 	suite, _, err := r.Run(context.Background(), []string{testFile})
@@ -188,10 +205,51 @@ func TestRunner_Run_SandboxError(t *testing.T) {
 	}
 }
 
+// TestRunOne_FakeCommandRunner tests the runOne success path using a fake
+// command runner that returns valid JSON, exercising parseOutput without nvim.
+func TestRunOne_FakeCommandRunner(t *testing.T) {
+	output := runOutput{
+		Tests: []testJSON{{Name: "my > test", Status: "pass", DurationMs: 1.0}},
+	}
+	raw, err := json.Marshal(output)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	r := New("/nvim", sandbox.NewFactory(), &fakeCommandRunner{stdout: raw}, false)
+	testFile := createTempLuaFile(t)
+
+	suite, cov, err := r.runOne(context.Background(), testFile)
+	if err != nil {
+		t.Fatalf("runOne() unexpected error: %v", err)
+	}
+	if len(suite.Tests) != 1 {
+		t.Fatalf("expected 1 test, got %d", len(suite.Tests))
+	}
+	if suite.Tests[0].Status != domain.StatusPass {
+		t.Errorf("expected StatusPass, got %v", suite.Tests[0].Status)
+	}
+	if cov == nil {
+		t.Fatal("runOne() returned nil cov")
+	}
+}
+
+// TestRunOne_FakeCommandRunner_Error tests the runOne error path when the
+// command runner returns a non-zero exit.
+func TestRunOne_FakeCommandRunner_Error(t *testing.T) {
+	r := New("/nvim", sandbox.NewFactory(), &fakeCommandRunner{err: fmt.Errorf("exit status 1")}, false)
+	testFile := createTempLuaFile(t)
+
+	_, _, err := r.runOne(context.Background(), testFile)
+	if err == nil {
+		t.Fatal("runOne() expected error, got nil")
+	}
+}
+
 func createTempLuaFile(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	path := dir + "/spec.lua"
+	path := filepath.Join(dir, "spec.lua")
 	if err := os.WriteFile(path, []byte("-- spec"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -205,7 +263,10 @@ func TestParseOutput_InvalidLineNumber(t *testing.T) {
 			{Path: "lua/mod.lua", Lines: map[string]int{"notanumber": 1, "2": 5}},
 		},
 	}
-	raw, _ := json.Marshal(data)
+	raw, err := json.Marshal(data)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
 
 	_, cov, err := parseOutput(raw)
 	if err != nil {

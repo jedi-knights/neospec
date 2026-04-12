@@ -1,10 +1,51 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+// TestUserCacheDirWith_HappyPath checks the primary branch: UserCacheDir succeeds.
+func TestUserCacheDirWith_HappyPath(t *testing.T) {
+	d := osDirs{
+		userCacheDir: func() (string, error) { return "/cache", nil },
+		userHomeDir:  func() (string, error) { return "/home", nil },
+		tempDir:      func() string { return "/tmp" },
+	}
+	if got := userCacheDirWith(d); got != "/cache" {
+		t.Errorf("userCacheDirWith() = %q, want %q", got, "/cache")
+	}
+}
+
+// TestUserCacheDirWith_HomeFallback checks the second branch: UserCacheDir fails
+// but UserHomeDir succeeds. This occurs in containers without a cache-dir entry.
+func TestUserCacheDirWith_HomeFallback(t *testing.T) {
+	d := osDirs{
+		userCacheDir: func() (string, error) { return "", fmt.Errorf("no cache dir") },
+		userHomeDir:  func() (string, error) { return "/home/user", nil },
+		tempDir:      func() string { return "/tmp" },
+	}
+	want := "/home/user/.cache"
+	if got := userCacheDirWith(d); got != want {
+		t.Errorf("userCacheDirWith() = %q, want %q", got, want)
+	}
+}
+
+// TestUserCacheDirWith_TempFallback checks the final branch: both UserCacheDir
+// and UserHomeDir fail. This occurs in minimal container environments.
+func TestUserCacheDirWith_TempFallback(t *testing.T) {
+	d := osDirs{
+		userCacheDir: func() (string, error) { return "", fmt.Errorf("no cache dir") },
+		userHomeDir:  func() (string, error) { return "", fmt.Errorf("no home dir") },
+		tempDir:      func() string { return "/tmp" },
+	}
+	want := "/tmp/neospec"
+	if got := userCacheDirWith(d); got != want {
+		t.Errorf("userCacheDirWith() = %q, want %q", got, want)
+	}
+}
 
 // TestLoad_CacheDirIsAbsolute verifies that the resolved CacheDir is always an
 // absolute path, even when the system cache directory is unavailable. A relative
@@ -170,6 +211,20 @@ func TestLoad_TOMLReadError(t *testing.T) {
 	_, err := Load(dir) // directory path, not a file — os.ReadFile returns an error
 	if err == nil {
 		t.Error("Load() on a directory path should return error")
+	}
+}
+
+// TestLoad_EnvVerboseFalseOverridesDefault checks that NEOSPEC_VERBOSE=false
+// overrides a true value already set (e.g. from a TOML file) by applyEnv.
+func TestLoad_EnvVerboseFalseOverridesDefault(t *testing.T) {
+	// Set verbose to true via an env var first, then override it to false.
+	// We test via applyEnv directly since Load always starts from defaults (false).
+	// Seed a config with Verbose=true (as if loaded from TOML).
+	cfg := Config{Verbose: true}
+	t.Setenv("NEOSPEC_VERBOSE", "false")
+	applyEnv(&cfg)
+	if cfg.Verbose {
+		t.Error("Verbose = true, want false when NEOSPEC_VERBOSE=false")
 	}
 }
 

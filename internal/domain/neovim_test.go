@@ -92,7 +92,7 @@ func TestVersionAssetName(t *testing.T) {
 		{domain.Platform{OS: domain.OSLinux, Arch: domain.ArchAMD64}, "nvim-linux-x86_64.tar.gz"},
 		{domain.Platform{OS: domain.OSLinux, Arch: domain.ArchARM64}, "nvim-linux-arm64.tar.gz"},
 		{domain.Platform{OS: domain.OSDarwin, Arch: domain.ArchAMD64}, "nvim-macos-x86_64.tar.gz"},
-		{domain.Platform{OS: domain.OSDarwin, Arch: domain.ArchARM64}, "nvim-macos-x86_64.tar.gz"},
+		{domain.Platform{OS: domain.OSDarwin, Arch: domain.ArchARM64}, "nvim-macos-arm64.tar.gz"},
 		{domain.Platform{OS: domain.OSWindows, Arch: domain.ArchAMD64}, "nvim-win64.zip"},
 		{domain.Platform{OS: domain.OS("freebsd"), Arch: domain.ArchAMD64}, ""},
 	}

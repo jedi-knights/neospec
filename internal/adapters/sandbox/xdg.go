@@ -6,6 +6,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,35 +14,57 @@ import (
 	"github.com/jedi-knights/neospec/internal/ports"
 )
 
+// fsOps abstracts the OS filesystem operations used by Factory.Create. Holding
+// them in an interface lets tests inject fakes that trigger the MkdirTemp and
+// MkdirAll error branches without manipulating real filesystem state.
+type fsOps interface {
+	MkdirTemp(dir, pattern string) (string, error)
+	MkdirAll(path string, perm os.FileMode) error
+	RemoveAll(path string) error
+}
+
+// realFS is the production fsOps implementation that delegates to the os package.
+type realFS struct{}
+
+func (realFS) MkdirTemp(dir, pattern string) (string, error) { return os.MkdirTemp(dir, pattern) }
+func (realFS) MkdirAll(path string, perm os.FileMode) error  { return os.MkdirAll(path, perm) }
+func (realFS) RemoveAll(path string) error                   { return os.RemoveAll(path) }
+
 // xdgSandbox is a single-use XDG environment tied to a temporary directory.
 type xdgSandbox struct {
 	root string
+	fs   fsOps
 }
 
 // Factory creates XDG sandboxes.
-type Factory struct{}
+type Factory struct {
+	fs fsOps
+}
 
-// NewFactory creates a Factory.
+// NewFactory creates a Factory backed by the real OS filesystem.
 func NewFactory() *Factory {
-	return &Factory{}
+	return &Factory{fs: realFS{}}
 }
 
 // Create creates a new sandbox with a unique temporary root directory.
 func (f *Factory) Create(_ context.Context) (ports.Sandbox, error) {
-	root, err := os.MkdirTemp("", "neospec-sandbox-*")
+	root, err := f.fs.MkdirTemp("", "neospec-sandbox-*")
 	if err != nil {
 		return nil, fmt.Errorf("creating sandbox temp dir: %w", err)
 	}
 
 	// Pre-create all XDG subdirectories so Neovim doesn't encounter missing dirs.
 	for _, sub := range []string{"data", "config", "state", "cache", "runtime"} {
-		if err := os.MkdirAll(filepath.Join(root, sub), 0o700); err != nil {
-			_ = os.RemoveAll(root)
-			return nil, fmt.Errorf("creating xdg subdir %s: %w", sub, err)
+		if err := f.fs.MkdirAll(filepath.Join(root, sub), 0o700); err != nil {
+			mkdirErr := fmt.Errorf("creating xdg subdir %s: %w", sub, err)
+			if cerr := f.fs.RemoveAll(root); cerr != nil {
+				return nil, errors.Join(mkdirErr, fmt.Errorf("cleaning up sandbox root: %w", cerr))
+			}
+			return nil, mkdirErr
 		}
 	}
 
-	return &xdgSandbox{root: root}, nil
+	return &xdgSandbox{root: root, fs: f.fs}, nil
 }
 
 // Env returns the environment variables that activate this sandbox.
@@ -66,5 +89,5 @@ func (s *xdgSandbox) Dir() string {
 
 // Close removes all temporary directories created for this sandbox.
 func (s *xdgSandbox) Close() error {
-	return os.RemoveAll(s.root)
+	return s.fs.RemoveAll(s.root)
 }

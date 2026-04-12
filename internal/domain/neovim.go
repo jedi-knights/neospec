@@ -53,7 +53,11 @@ func (v Version) String() string {
 func (v Version) AssetName(p Platform) string {
 	switch p.OS {
 	case OSDarwin:
-		// macOS releases ship a single universal binary tarball.
+		// As of Neovim 0.10, GitHub releases ship separate x86_64 and arm64
+		// tarballs for macOS rather than a single universal binary.
+		if p.Arch == ArchARM64 {
+			return "nvim-macos-arm64.tar.gz"
+		}
 		return "nvim-macos-x86_64.tar.gz"
 	case OSLinux:
 		switch p.Arch {
