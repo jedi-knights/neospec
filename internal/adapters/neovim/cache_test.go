@@ -372,6 +372,27 @@ func TestCache_Extract_Zip_WriteDirConflict(t *testing.T) {
 	}
 }
 
+// TestCache_Extract_MkdirError covers the os.MkdirAll error path in Extract.
+// Using a regular file as the cache root causes VersionDir to produce a path
+// under the file, so MkdirAll fails with "not a directory".
+func TestCache_Extract_MkdirError(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "not-a-dir-*")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	tmpFile.Close()
+	t.Cleanup(func() { os.Remove(tmpFile.Name()) })
+
+	c := neovim.NewCache(tmpFile.Name())
+	v, _ := domain.ParseVersion("stable")
+	p := domain.Platform{OS: domain.OSLinux, Arch: domain.ArchAMD64}
+
+	_, err = c.Extract(v, p, "archive.tar.gz")
+	if err == nil {
+		t.Error("Extract() expected error when MkdirAll fails (cache root is a file)")
+	}
+}
+
 func TestCache_Extract_TarGz_FileNotFound(t *testing.T) {
 	cacheDir := t.TempDir()
 	c := neovim.NewCache(cacheDir)

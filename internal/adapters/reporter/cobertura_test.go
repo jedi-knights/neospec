@@ -61,6 +61,15 @@ func TestCobertura_Write_WithCoverage(t *testing.T) {
 	}
 }
 
+// TestCobertura_Write_EncodeError covers the xml.Encoder.Encode error branch.
+func TestCobertura_Write_EncodeError(t *testing.T) {
+	r := reporter.NewCobertura()
+	err := r.Write(context.Background(), failingWriter{}, &domain.SuiteResult{}, nil)
+	if err == nil {
+		t.Fatal("Write() expected error on encode failure, got nil")
+	}
+}
+
 func TestCobertura_Write_MultipleFiles(t *testing.T) {
 	cov := &domain.CoverageData{
 		Files: []*domain.FileCoverage{

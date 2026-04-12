@@ -3,6 +3,7 @@ package neovim
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,6 +13,25 @@ import (
 
 	"github.com/jedi-knights/neospec/internal/domain"
 )
+
+// errorBodyReader is an io.Reader that always returns an error on Read.
+// It is used to simulate a response body that fails during io.Copy.
+type errorBodyReader struct{}
+
+func (errorBodyReader) Read(_ []byte) (int, error) {
+	return 0, fmt.Errorf("simulated body read failure")
+}
+
+// errorBodyTransport is an http.RoundTripper that returns a 200 OK response
+// with a body reader that always fails. Used to exercise the io.Copy error path.
+type errorBodyTransport struct{}
+
+func (errorBodyTransport) RoundTrip(_ *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(errorBodyReader{}),
+	}, nil
+}
 
 // errorTransport is an http.RoundTripper that always returns a network error.
 type errorTransport struct{}
@@ -129,6 +149,20 @@ func TestDownloader_Download_CreateFileError(t *testing.T) {
 	err := d.Download(context.Background(), v, p, destPath)
 	if err == nil {
 		t.Error("Download() expected error when destPath is a directory")
+	}
+}
+
+// TestDownloader_Download_CopyError covers the io.Copy error path in Download.
+// The transport returns a 200 OK with a body reader that always fails,
+// causing io.Copy to return an error after os.Create succeeds.
+func TestDownloader_Download_CopyError(t *testing.T) {
+	d := &Downloader{client: &http.Client{Transport: errorBodyTransport{}}}
+	v, _ := domain.ParseVersion("stable")
+	p := domain.Platform{OS: domain.OSLinux, Arch: domain.ArchAMD64}
+
+	err := d.Download(context.Background(), v, p, filepath.Join(t.TempDir(), "out.tar.gz"))
+	if err == nil {
+		t.Error("Download() expected error when response body copy fails")
 	}
 }
 

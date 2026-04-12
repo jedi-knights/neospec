@@ -3,6 +3,7 @@ package reporter_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,14 @@ import (
 	"github.com/jedi-knights/neospec/internal/adapters/reporter"
 	"github.com/jedi-knights/neospec/internal/domain"
 )
+
+// failingWriter is an io.Writer that always returns an error.
+// Used to exercise XML/JSON encoding error branches across reporter tests.
+type failingWriter struct{}
+
+func (failingWriter) Write(_ []byte) (int, error) {
+	return 0, fmt.Errorf("simulated write failure")
+}
 
 func TestJUnit_Write_AllStatuses(t *testing.T) {
 	suite := &domain.SuiteResult{
@@ -58,6 +67,16 @@ func TestJUnit_Write_AllStatuses(t *testing.T) {
 	}
 	if !strings.Contains(got, `skipped="1"`) {
 		t.Errorf("expected skipped=1:\n%s", got)
+	}
+}
+
+// TestJUnit_Write_EncodeError covers the xml.Encoder.Encode error branch.
+// A failing writer causes enc.Encode to return an error.
+func TestJUnit_Write_EncodeError(t *testing.T) {
+	r := reporter.NewJUnit()
+	err := r.Write(context.Background(), failingWriter{}, &domain.SuiteResult{}, nil)
+	if err == nil {
+		t.Fatal("Write() expected error on encode failure, got nil")
 	}
 }
 
