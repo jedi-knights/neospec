@@ -45,6 +45,13 @@ func TestCoverageDataAggregate(t *testing.T) {
 	}
 }
 
+func TestCoverageDataPercentage_Empty(t *testing.T) {
+	cov := &domain.CoverageData{}
+	if pct := cov.Percentage(); pct != 0 {
+		t.Errorf("Percentage() on empty CoverageData = %.1f, want 0", pct)
+	}
+}
+
 func TestCoverageDataFileByPath(t *testing.T) {
 	fc := &domain.FileCoverage{Path: "lua/init.lua", Lines: map[int]int{1: 1}}
 	cov := &domain.CoverageData{Files: []*domain.FileCoverage{fc}}
