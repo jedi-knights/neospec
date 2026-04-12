@@ -31,7 +31,7 @@ jobs:
         run: test -f LICENSE || (echo "::error::LICENSE file is missing" && exit 1)
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@v9
         with:
           version: v2.11.4
           github-token: ${{ secrets.GH_TOKEN }}
