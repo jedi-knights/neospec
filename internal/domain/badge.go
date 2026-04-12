@@ -23,12 +23,3 @@ func BadgeColor(pct float64) string {
 func BadgeLabel(pct float64) string {
 	return fmt.Sprintf("%.1f%%", pct)
 }
-
-// ShieldsBadgeURL returns a shields.io badge URL for the given coverage percentage.
-// The URL is stable (same percentage always produces the same URL) so it can be
-// written into a README and committed.
-func ShieldsBadgeURL(pct float64) string {
-	label := BadgeLabel(pct)
-	color := BadgeColor(pct)
-	return fmt.Sprintf("https://img.shields.io/badge/coverage-%s-%s", label, color)
-}
