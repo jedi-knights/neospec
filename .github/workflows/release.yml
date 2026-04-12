@@ -12,6 +12,13 @@ on:
     types: [completed]
     branches: [main]
 
+# Ensure only one release runs at a time. cancel-in-progress: false queues
+# the second run rather than dropping it; once the first completes and the
+# tag exists, semantic-release will find no new commits and exit as a no-op.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
