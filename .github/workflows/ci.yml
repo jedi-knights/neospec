@@ -27,6 +27,9 @@ jobs:
           go-version-file: go.mod
           cache: false
 
+      - name: Check LICENSE file
+        run: test -f LICENSE || (echo "::error::LICENSE file is missing" && exit 1)
+
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v7
         with:
