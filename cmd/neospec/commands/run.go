@@ -3,6 +3,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,11 +13,18 @@ import (
 	"github.com/jedi-knights/neospec/internal/adapters/neovim"
 	"github.com/jedi-knights/neospec/internal/adapters/reporter"
 	"github.com/jedi-knights/neospec/internal/adapters/runner"
-	"github.com/jedi-knights/neospec/internal/adapters/sandbox"
 	"github.com/jedi-knights/neospec/internal/config"
 	"github.com/jedi-knights/neospec/internal/domain"
 	"github.com/jedi-knights/neospec/internal/ports"
 )
+
+// runDeps holds injectable dependencies for runTests. Pass runDeps{} in
+// production — zero-value (nil) fields cause the real adapters to be constructed.
+// In tests, set individual fields to inject fakes without touching the network.
+type runDeps struct {
+	neovimProvider ports.NeovimProvider
+	testRunner     ports.TestRunner
+}
 
 // runFlags holds values parsed from CLI flags for the run command.
 type runFlags struct {
@@ -39,7 +47,7 @@ func NewRunCmd() *cobra.Command {
 		Short: "Run Lua tests and collect coverage",
 		Long:  `Discovers test files, executes them in an isolated Neovim subprocess, and emits reports.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runTests(cmd.Context(), flags)
+			return runTests(cmd.Context(), flags, runDeps{})
 		},
 	}
 
@@ -56,7 +64,7 @@ func NewRunCmd() *cobra.Command {
 	return cmd
 }
 
-func runTests(ctx context.Context, flags *runFlags) error {
+func runTests(ctx context.Context, flags *runFlags, deps runDeps) error {
 	cfg, err := config.Load(flags.configPath)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -73,12 +81,20 @@ func runTests(ctx context.Context, flags *runFlags) error {
 		return fmt.Errorf("detecting platform: %w", err)
 	}
 
-	nvimPath, err := provisionNeovim(ctx, cfg, version, platform)
+	nvimProvider := deps.neovimProvider
+	if nvimProvider == nil {
+		nvimProvider = neovim.NewProvider(cfg.CacheDir)
+	}
+	nvimPath, err := provisionNeovim(ctx, cfg, version, platform, nvimProvider)
 	if err != nil {
 		return err
 	}
 
-	suite, cov, err := executeTests(ctx, cfg, nvimPath)
+	tr := deps.testRunner
+	if tr == nil {
+		tr = runner.NewWithDefaultSandbox(nvimPath, cfg.Verbose)
+	}
+	suite, cov, err := executeTests(ctx, cfg, tr)
 	if err != nil {
 		return err
 	}
@@ -101,14 +117,14 @@ func runTests(ctx context.Context, flags *runFlags) error {
 	return nil
 }
 
-// provisionNeovim ensures the Neovim binary for the given version and platform
-// is available in the local cache and returns its path.
-func provisionNeovim(ctx context.Context, cfg config.Config, version domain.Version, platform domain.Platform) (string, error) {
+// provisionNeovim calls provider.Ensure for the given version and platform and
+// returns the path to the nvim binary. The provider is injected so tests can
+// supply a fake without touching the filesystem or network.
+func provisionNeovim(ctx context.Context, cfg config.Config, version domain.Version, platform domain.Platform, provider ports.NeovimProvider) (string, error) {
 	if cfg.Verbose {
 		fmt.Fprintf(os.Stderr, "neospec: platform=%s neovim=%s\n", platform, version)
 	}
-	nvimProvider := neovim.NewProvider(cfg.CacheDir)
-	nvimPath, err := nvimProvider.Ensure(ctx, version, platform)
+	nvimPath, err := provider.Ensure(ctx, version, platform)
 	if err != nil {
 		return "", fmt.Errorf("ensuring neovim binary: %w", err)
 	}
@@ -120,9 +136,9 @@ func provisionNeovim(ctx context.Context, cfg config.Config, version domain.Vers
 
 // executeTests discovers and runs test files, then ensures the coverage output
 // directory exists. It returns nil suite and coverage (with no error) when no
-// test files are found so the caller can exit cleanly.
-func executeTests(ctx context.Context, cfg config.Config, nvimPath string) (*domain.SuiteResult, *domain.CoverageData, error) {
-	testRunner := runner.New(nvimPath, sandbox.NewFactory(), cfg.Verbose)
+// test files are found so the caller can exit cleanly. The testRunner is injected
+// so tests can supply a fake without spawning Neovim subprocesses.
+func executeTests(ctx context.Context, cfg config.Config, testRunner ports.TestRunner) (*domain.SuiteResult, *domain.CoverageData, error) {
 	files, err := testRunner.Discover(ctx, cfg.TestPatterns)
 	if err != nil {
 		return nil, nil, fmt.Errorf("discovering test files: %w", err)
@@ -156,8 +172,8 @@ func emitReports(ctx context.Context, cfg config.Config, suite *domain.SuiteResu
 		}
 		writeErr := r.Write(ctx, f, suite, cov)
 		if f != nil && f != os.Stdout {
-			if cerr := f.Close(); cerr != nil && writeErr == nil {
-				writeErr = cerr
+			if cerr := f.Close(); cerr != nil {
+				writeErr = errors.Join(writeErr, cerr)
 			}
 		}
 		if writeErr != nil {

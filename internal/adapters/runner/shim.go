@@ -13,6 +13,11 @@ var luaFS embed.FS
 // before each Neovim invocation. It concatenates the coverage hook and the
 // test harness, then appends the dofile() call for the actual test file.
 func buildShim(testFile string) ([]byte, error) {
+	// The three error branches below are structurally unreachable. The //go:embed
+	// directive above causes a compile-time error if any of the named Lua files
+	// are missing from the source tree, so by the time the binary runs the files
+	// are guaranteed present in luaFS. embed.FS.ReadFile only fails for absent
+	// paths; the error returns are kept for API correctness only.
 	hook, err := luaFS.ReadFile("lua/coverage_hook.lua")
 	if err != nil {
 		return nil, fmt.Errorf("reading coverage_hook.lua: %w", err)

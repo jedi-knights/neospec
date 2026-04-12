@@ -38,6 +38,10 @@ func (d *Downloader) Download(ctx context.Context, v domain.Version, p domain.Pl
 		return fmt.Errorf("creating download dir: %w", err)
 	}
 
+	// This error branch is structurally unreachable: http.NewRequestWithContext
+	// only fails when the method or URL is malformed. Both are constructed from
+	// the compile-time constant http.MethodGet and a well-formed URL built from
+	// the fixed githubReleaseBase prefix. No user-supplied input reaches here.
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("creating request: %w", err)

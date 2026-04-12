@@ -35,8 +35,15 @@ type Platform struct {
 
 // CurrentPlatform returns the Platform for the running process.
 func CurrentPlatform() (Platform, error) {
+	return parsePlatform(runtime.GOOS, runtime.GOARCH)
+}
+
+// parsePlatform maps a GOOS/GOARCH pair to a Platform. It is the testable
+// inner function for CurrentPlatform — callers that need to simulate unusual
+// or unsupported platforms can call it directly in white-box tests.
+func parsePlatform(goos, goarch string) (Platform, error) {
 	var os OS
-	switch runtime.GOOS {
+	switch goos {
 	case "linux":
 		os = OSLinux
 	case "darwin":
@@ -44,17 +51,17 @@ func CurrentPlatform() (Platform, error) {
 	case "windows":
 		os = OSWindows
 	default:
-		return Platform{}, fmt.Errorf("unsupported OS: %s", runtime.GOOS)
+		return Platform{}, fmt.Errorf("unsupported OS: %s", goos)
 	}
 
 	var arch Arch
-	switch runtime.GOARCH {
+	switch goarch {
 	case "amd64":
 		arch = ArchAMD64
 	case "arm64":
 		arch = ArchARM64
 	default:
-		return Platform{}, fmt.Errorf("unsupported architecture: %s", runtime.GOARCH)
+		return Platform{}, fmt.Errorf("unsupported architecture: %s", goarch)
 	}
 
 	return Platform{OS: os, Arch: arch}, nil

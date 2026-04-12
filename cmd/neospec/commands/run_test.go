@@ -2,12 +2,45 @@ package commands
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 
 	"github.com/jedi-knights/neospec/internal/config"
 	"github.com/jedi-knights/neospec/internal/domain"
+	"github.com/jedi-knights/neospec/internal/ports"
 )
+
+// fakeNeovimProvider satisfies ports.NeovimProvider for tests.
+type fakeNeovimProvider struct {
+	path string
+	err  error
+}
+
+func (f *fakeNeovimProvider) Ensure(_ context.Context, _ domain.Version, _ domain.Platform) (string, error) {
+	return f.path, f.err
+}
+
+// fakeTestRunner satisfies ports.TestRunner for tests.
+type fakeTestRunner struct {
+	files       []string
+	suite       *domain.SuiteResult
+	cov         *domain.CoverageData
+	discoverErr error
+	runErr      error
+}
+
+func (f *fakeTestRunner) Discover(_ context.Context, _ []string) ([]string, error) {
+	return f.files, f.discoverErr
+}
+
+func (f *fakeTestRunner) Run(_ context.Context, _ []string) (*domain.SuiteResult, *domain.CoverageData, error) {
+	return f.suite, f.cov, f.runErr
+}
+
+// compile-time interface compliance checks
+var _ ports.NeovimProvider = (*fakeNeovimProvider)(nil)
+var _ ports.TestRunner = (*fakeTestRunner)(nil)
 
 func TestCheckThreshold_BelowThreshold(t *testing.T) {
 	cfg := config.Config{Threshold: 80.0}
@@ -119,13 +152,15 @@ func TestReporterFor_FileFormats(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reporterFor(%q) error: %v", format, err)
 			}
+			if f != nil {
+				t.Cleanup(func() { f.Close() })
+			}
 			if r == nil {
 				t.Errorf("reporterFor(%q) returned nil reporter", format)
 			}
 			if f == nil {
 				t.Errorf("reporterFor(%q) returned nil file", format)
 			}
-			f.Close()
 		})
 	}
 }
@@ -196,5 +231,122 @@ func TestNewRunCmd(t *testing.T) {
 	}
 	if cmd.Use != "run" {
 		t.Errorf("cmd.Use = %q, want %q", cmd.Use, "run")
+	}
+}
+
+// TestProvisionNeovim_Success exercises provisionNeovim with an injected provider.
+func TestProvisionNeovim_Success(t *testing.T) {
+	cfg := config.Config{Verbose: false}
+	version, _ := domain.ParseVersion("stable")
+	platform, _ := domain.CurrentPlatform()
+
+	provider := &fakeNeovimProvider{path: "/fake/nvim"}
+	got, err := provisionNeovim(context.Background(), cfg, version, platform, provider)
+	if err != nil {
+		t.Fatalf("provisionNeovim() error: %v", err)
+	}
+	if got != "/fake/nvim" {
+		t.Errorf("got %q, want %q", got, "/fake/nvim")
+	}
+}
+
+// TestProvisionNeovim_Verbose exercises the verbose print branch in provisionNeovim.
+func TestProvisionNeovim_Verbose(t *testing.T) {
+	cfg := config.Config{Verbose: true}
+	version, _ := domain.ParseVersion("stable")
+	platform, _ := domain.CurrentPlatform()
+
+	provider := &fakeNeovimProvider{path: "/fake/nvim"}
+	_, err := provisionNeovim(context.Background(), cfg, version, platform, provider)
+	if err != nil {
+		t.Fatalf("provisionNeovim() verbose error: %v", err)
+	}
+}
+
+// TestProvisionNeovim_Error exercises the error path in provisionNeovim.
+func TestProvisionNeovim_Error(t *testing.T) {
+	cfg := config.Config{}
+	version, _ := domain.ParseVersion("stable")
+	platform, _ := domain.CurrentPlatform()
+
+	provider := &fakeNeovimProvider{err: fmt.Errorf("download failed")}
+	_, err := provisionNeovim(context.Background(), cfg, version, platform, provider)
+	if err == nil {
+		t.Fatal("provisionNeovim() expected error, got nil")
+	}
+}
+
+// TestExecuteTests_NoFiles exercises the "no test files found" branch.
+func TestExecuteTests_NoFiles(t *testing.T) {
+	cfg := config.Config{TestPatterns: []string{"test/**/*_spec.lua"}}
+	tr := &fakeTestRunner{files: []string{}}
+
+	suite, cov, err := executeTests(context.Background(), cfg, tr)
+	if err != nil {
+		t.Fatalf("executeTests() error: %v", err)
+	}
+	if suite != nil || cov != nil {
+		t.Error("expected nil suite and cov when no files found")
+	}
+}
+
+// TestExecuteTests_DiscoverError exercises the Discover error path.
+func TestExecuteTests_DiscoverError(t *testing.T) {
+	cfg := config.Config{}
+	tr := &fakeTestRunner{discoverErr: fmt.Errorf("glob failed")}
+
+	_, _, err := executeTests(context.Background(), cfg, tr)
+	if err == nil {
+		t.Fatal("executeTests() expected error, got nil")
+	}
+}
+
+// TestExecuteTests_Success exercises the happy path with fake test results and
+// a real temp directory for CoverageDir.
+func TestExecuteTests_Success(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Config{CoverageDir: dir}
+	tr := &fakeTestRunner{
+		files: []string{"spec/a_spec.lua"},
+		suite: &domain.SuiteResult{Tests: []domain.TestResult{{Name: "a", Status: domain.StatusPass}}},
+		cov:   &domain.CoverageData{},
+	}
+
+	suite, cov, err := executeTests(context.Background(), cfg, tr)
+	if err != nil {
+		t.Fatalf("executeTests() error: %v", err)
+	}
+	if suite == nil {
+		t.Fatal("expected non-nil suite")
+	}
+	if cov == nil {
+		t.Fatal("expected non-nil cov")
+	}
+}
+
+// TestExecuteTests_RunError exercises the error path when testRunner.Run fails.
+func TestExecuteTests_RunError(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Config{CoverageDir: dir}
+	tr := &fakeTestRunner{
+		files:  []string{"spec/a_spec.lua"},
+		runErr: fmt.Errorf("nvim crash"),
+	}
+	_, _, err := executeTests(context.Background(), cfg, tr)
+	if err == nil {
+		t.Fatal("executeTests() expected error from Run, got nil")
+	}
+}
+
+// TestRunTests_NeovimProviderError exercises the runTests error path when
+// neovim provisioning fails.
+func TestRunTests_NeovimProviderError(t *testing.T) {
+	flags := &runFlags{} // empty → loads config defaults
+	deps := runDeps{
+		neovimProvider: &fakeNeovimProvider{err: fmt.Errorf("network timeout")},
+	}
+	err := runTests(context.Background(), flags, deps)
+	if err == nil {
+		t.Fatal("runTests() expected error, got nil")
 	}
 }

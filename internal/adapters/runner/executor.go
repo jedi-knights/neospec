@@ -1,12 +1,10 @@
 package runner
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -19,24 +17,28 @@ import (
 type Runner struct {
 	nvimPath string
 	sandboxF ports.SandboxFactory
+	exec     ports.CommandRunner
 	verbose  bool
 }
 
 // New creates a Runner.
 //   - nvimPath: absolute path to the nvim binary obtained from NeovimProvider.Ensure.
 //   - sandboxF: factory for creating per-run XDG sandboxes.
+//   - exec: Strategy for running subprocesses; inject a fake in tests.
 //   - verbose: whether to pass -V3 to nvim for diagnostic output.
-func New(nvimPath string, sandboxF ports.SandboxFactory, verbose bool) *Runner {
+func New(nvimPath string, sandboxF ports.SandboxFactory, exec ports.CommandRunner, verbose bool) *Runner {
 	return &Runner{
 		nvimPath: nvimPath,
 		sandboxF: sandboxF,
+		exec:     exec,
 		verbose:  verbose,
 	}
 }
 
-// NewWithDefaultSandbox creates a Runner using the standard XDG sandbox factory.
+// NewWithDefaultSandbox creates a Runner using the standard XDG sandbox factory
+// and the real os/exec command runner. Use this in production code.
 func NewWithDefaultSandbox(nvimPath string, verbose bool) *Runner {
-	return New(nvimPath, sandbox.NewFactory(), verbose)
+	return New(nvimPath, sandbox.NewFactory(), realCommandRunner{}, verbose)
 }
 
 // Discover satisfies the discovery half of ports.TestRunner.
@@ -110,18 +112,12 @@ func (r *Runner) runOne(ctx context.Context, testFile string) (*domain.SuiteResu
 		args = append([]string{"-V3"}, args...)
 	}
 
-	cmd := exec.CommandContext(ctx, r.nvimPath, args...)
-	cmd.Env = append(os.Environ(), sb.Env()...)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return nil, nil, fmt.Errorf("nvim exited with error: %w\nstderr: %s", err, stderr.String())
+	stdout, stderr, err := r.exec.Run(ctx, sb.Env(), r.nvimPath, args...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("nvim exited with error: %w\nstderr: %s", err, stderr)
 	}
 
-	return parseOutput(stdout.Bytes())
+	return parseOutput(stdout)
 }
 
 // parseOutput decodes the JSON emitted by the Lua harness.
