@@ -22,10 +22,6 @@ type Config struct {
 	CoverageDir string `toml:"coverage_dir"`
 	// Formats lists the report formats to emit: lcov, cobertura, coveralls, junit, console.
 	Formats []string `toml:"formats"`
-	// BadgePatch controls whether neospec patches the README badge.
-	BadgePatch bool `toml:"badge_patch"`
-	// ReadmePath is the path to the README file for badge patching.
-	ReadmePath string `toml:"readme_path"`
 	// Threshold is the minimum required coverage percentage; a non-zero value
 	// causes neospec to exit non-zero when coverage falls below it.
 	Threshold float64 `toml:"threshold"`
@@ -43,8 +39,6 @@ func defaults() Config {
 		TestPatterns:  []string{"test/**/*_spec.lua"},
 		CoverageDir:   "coverage",
 		Formats:       []string{"console"},
-		BadgePatch:    false,
-		ReadmePath:    "README.md",
 		Threshold:     0.0,
 		CacheDir:      cacheDir,
 		Verbose:       false,
@@ -98,12 +92,6 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("NEOSPEC_FORMATS"); v != "" {
 		cfg.Formats = strings.Split(v, ",")
 	}
-	if v := os.Getenv("NEOSPEC_BADGE_PATCH"); v == "true" || v == "1" {
-		cfg.BadgePatch = true
-	}
-	if v := os.Getenv("NEOSPEC_README_PATH"); v != "" {
-		cfg.ReadmePath = v
-	}
 	if v := os.Getenv("NEOSPEC_CACHE_DIR"); v != "" {
 		cfg.CacheDir = v
 	}
@@ -112,12 +100,16 @@ func applyEnv(cfg *Config) {
 	}
 }
 
-// userCacheDir returns os.UserCacheDir() with a fallback to ~/.cache so we
-// never produce an empty path even on minimal systems.
+// userCacheDir returns os.UserCacheDir() with progressive fallbacks so the
+// returned path is always absolute. On minimal systems (containers without a
+// passwd entry), both UserCacheDir and UserHomeDir may fail; in that case we
+// fall back to the OS temp directory, which is guaranteed to be absolute.
 func userCacheDir() string {
 	if d, err := os.UserCacheDir(); err == nil {
 		return d
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".cache")
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".cache")
+	}
+	return filepath.Join(os.TempDir(), "neospec")
 }

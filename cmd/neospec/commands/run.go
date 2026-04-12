@@ -9,7 +9,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/jedi-knights/neospec/internal/adapters/badge"
 	"github.com/jedi-knights/neospec/internal/adapters/neovim"
 	"github.com/jedi-knights/neospec/internal/adapters/reporter"
 	"github.com/jedi-knights/neospec/internal/adapters/runner"
@@ -26,8 +25,6 @@ type runFlags struct {
 	patterns      []string
 	coverageDir   string
 	formats       []string
-	badgePatch    bool
-	readmePath    string
 	threshold     float64
 	cacheDir      string
 	verbose       bool
@@ -52,8 +49,6 @@ func NewRunCmd() *cobra.Command {
 	f.StringArrayVar(&flags.patterns, "pattern", nil, "glob pattern(s) for test files (repeatable)")
 	f.StringVar(&flags.coverageDir, "coverage-dir", "", "directory for coverage report files")
 	f.StringArrayVar(&flags.formats, "format", nil, "output format(s): console, lcov, cobertura, coveralls, junit (repeatable)")
-	f.BoolVar(&flags.badgePatch, "badge", false, "patch coverage badge in README.md")
-	f.StringVar(&flags.readmePath, "readme", "", "path to README for badge patching")
 	f.Float64Var(&flags.threshold, "threshold", 0, "minimum coverage percentage (non-zero fails if below)")
 	f.StringVar(&flags.cacheDir, "cache-dir", "", "directory for cached Neovim binaries")
 	f.BoolVarP(&flags.verbose, "verbose", "v", false, "verbose output")
@@ -70,61 +65,97 @@ func runTests(ctx context.Context, flags *runFlags) error {
 
 	version, err := domain.ParseVersion(cfg.NeovimVersion)
 	if err != nil {
-		return err
+		return fmt.Errorf("parsing neovim version: %w", err)
 	}
 
 	platform, err := domain.CurrentPlatform()
 	if err != nil {
+		return fmt.Errorf("detecting platform: %w", err)
+	}
+
+	nvimPath, err := provisionNeovim(ctx, cfg, version, platform)
+	if err != nil {
 		return err
 	}
 
+	suite, cov, err := executeTests(ctx, cfg, nvimPath)
+	if err != nil {
+		return err
+	}
+	if suite == nil {
+		return nil // no test files found
+	}
+
+	if err := emitReports(ctx, cfg, suite, cov); err != nil {
+		return err
+	}
+
+	if err := checkThreshold(cfg, cov); err != nil {
+		return err
+	}
+
+	if !suite.Passed() {
+		return fmt.Errorf("test suite failed")
+	}
+
+	return nil
+}
+
+// provisionNeovim ensures the Neovim binary for the given version and platform
+// is available in the local cache and returns its path.
+func provisionNeovim(ctx context.Context, cfg config.Config, version domain.Version, platform domain.Platform) (string, error) {
 	if cfg.Verbose {
 		fmt.Fprintf(os.Stderr, "neospec: platform=%s neovim=%s\n", platform, version)
 	}
-
-	// 1. Ensure Neovim binary is available.
 	nvimProvider := neovim.NewProvider(cfg.CacheDir)
 	nvimPath, err := nvimProvider.Ensure(ctx, version, platform)
 	if err != nil {
-		return fmt.Errorf("ensuring neovim binary: %w", err)
+		return "", fmt.Errorf("ensuring neovim binary: %w", err)
 	}
 	if cfg.Verbose {
 		fmt.Fprintf(os.Stderr, "neospec: nvim binary at %s\n", nvimPath)
 	}
+	return nvimPath, nil
+}
 
-	// 2. Discover test files.
+// executeTests discovers and runs test files, then ensures the coverage output
+// directory exists. It returns nil suite and coverage (with no error) when no
+// test files are found so the caller can exit cleanly.
+func executeTests(ctx context.Context, cfg config.Config, nvimPath string) (*domain.SuiteResult, *domain.CoverageData, error) {
 	testRunner := runner.New(nvimPath, sandbox.NewFactory(), cfg.Verbose)
 	files, err := testRunner.Discover(ctx, cfg.TestPatterns)
 	if err != nil {
-		return fmt.Errorf("discovering test files: %w", err)
+		return nil, nil, fmt.Errorf("discovering test files: %w", err)
 	}
 	if len(files) == 0 {
 		fmt.Fprintln(os.Stderr, "neospec: no test files found")
-		return nil
+		return nil, nil, nil
 	}
 	if cfg.Verbose {
 		fmt.Fprintf(os.Stderr, "neospec: found %d test file(s)\n", len(files))
 	}
 
-	// 3. Run tests.
 	suite, cov, err := testRunner.Run(ctx, files)
 	if err != nil {
-		return fmt.Errorf("running tests: %w", err)
+		return nil, nil, fmt.Errorf("running tests: %w", err)
 	}
 
-	// 4. Ensure coverage output directory exists.
 	if err := os.MkdirAll(cfg.CoverageDir, 0o755); err != nil {
-		return fmt.Errorf("creating coverage dir: %w", err)
+		return nil, nil, fmt.Errorf("creating coverage dir: %w", err)
 	}
 
-	// 5. Emit reports.
+	return suite, cov, nil
+}
+
+// emitReports writes all configured output formats to their respective destinations.
+func emitReports(ctx context.Context, cfg config.Config, suite *domain.SuiteResult, cov *domain.CoverageData) error {
 	for _, format := range cfg.Formats {
-		r, f, err := reporterFor(format, cfg, flags.verbose)
+		r, f, err := reporterFor(format, cfg, cfg.Verbose)
 		if err != nil {
 			return err
 		}
 		writeErr := r.Write(ctx, f, suite, cov)
-		if f != os.Stdout {
+		if f != nil && f != os.Stdout {
 			if cerr := f.Close(); cerr != nil && writeErr == nil {
 				writeErr = cerr
 			}
@@ -133,28 +164,15 @@ func runTests(ctx context.Context, flags *runFlags) error {
 			return fmt.Errorf("writing %s report: %w", format, writeErr)
 		}
 	}
+	return nil
+}
 
-	// 6. Patch README badge if requested.
-	if cfg.BadgePatch {
-		patcher := badge.NewPatcher()
-		if err := patcher.Patch(ctx, cfg.ReadmePath, cov.Percentage()); err != nil {
-			return fmt.Errorf("patching badge: %w", err)
-		}
+// checkThreshold returns an error if the measured coverage falls below the
+// configured minimum. A threshold of zero disables the check.
+func checkThreshold(cfg config.Config, cov *domain.CoverageData) error {
+	if cfg.Threshold > 0 && cov.Percentage() < cfg.Threshold {
+		return fmt.Errorf("coverage %.1f%% is below threshold %.1f%%", cov.Percentage(), cfg.Threshold)
 	}
-
-	// 7. Enforce coverage threshold.
-	if cfg.Threshold > 0 {
-		pct := cov.Percentage()
-		if pct < cfg.Threshold {
-			return fmt.Errorf("coverage %.1f%% is below threshold %.1f%%", pct, cfg.Threshold)
-		}
-	}
-
-	// Exit non-zero if any tests failed.
-	if !suite.Passed() {
-		return fmt.Errorf("test suite failed")
-	}
-
 	return nil
 }
 
@@ -206,12 +224,6 @@ func applyFlags(cfg *config.Config, flags *runFlags) {
 	}
 	if len(flags.formats) > 0 {
 		cfg.Formats = flags.formats
-	}
-	if flags.badgePatch {
-		cfg.BadgePatch = true
-	}
-	if flags.readmePath != "" {
-		cfg.ReadmePath = flags.readmePath
 	}
 	if flags.threshold != 0 {
 		cfg.Threshold = flags.threshold

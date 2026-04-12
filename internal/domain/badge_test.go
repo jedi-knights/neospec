@@ -1,7 +1,7 @@
 package domain_test
 
 import (
-	"strings"
+	"fmt"
 	"testing"
 
 	"github.com/jedi-knights/neospec/internal/domain"
@@ -24,18 +24,31 @@ func TestBadgeColor(t *testing.T) {
 		{0, "red"},
 	}
 	for _, tc := range tests {
-		if got := domain.BadgeColor(tc.pct); got != tc.color {
-			t.Errorf("BadgeColor(%.0f) = %q, want %q", tc.pct, got, tc.color)
-		}
+		tc := tc
+		t.Run(fmt.Sprintf("pct=%.0f", tc.pct), func(t *testing.T) {
+			if got := domain.BadgeColor(tc.pct); got != tc.color {
+				t.Errorf("BadgeColor(%.0f) = %q, want %q", tc.pct, got, tc.color)
+			}
+		})
 	}
 }
 
-func TestShieldsBadgeURL(t *testing.T) {
-	url := domain.ShieldsBadgeURL(87.5)
-	if !strings.HasPrefix(url, "https://img.shields.io/badge/coverage-") {
-		t.Errorf("unexpected badge URL: %s", url)
+func TestBadgeLabel(t *testing.T) {
+	tests := []struct {
+		pct  float64
+		want string
+	}{
+		{0, "0.0%"},
+		{87.5, "87.5%"},
+		{100, "100.0%"},
+		{33.333, "33.3%"},
 	}
-	if !strings.Contains(url, "green") {
-		t.Errorf("badge URL missing color: %s", url)
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.want, func(t *testing.T) {
+			if got := domain.BadgeLabel(tc.pct); got != tc.want {
+				t.Errorf("BadgeLabel(%v) = %q, want %q", tc.pct, got, tc.want)
+			}
+		})
 	}
 }

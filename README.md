@@ -7,9 +7,10 @@
 [![CI](https://github.com/jedi-knights/neospec/actions/workflows/ci.yml/badge.svg)](https://github.com/jedi-knights/neospec/actions/workflows/ci.yml)
 [![Release](https://github.com/jedi-knights/neospec/actions/workflows/release.yml/badge.svg)](https://github.com/jedi-knights/neospec/actions/workflows/release.yml)
 [![GoReleaser](https://github.com/jedi-knights/neospec/actions/workflows/goreleaser.yml/badge.svg)](https://github.com/jedi-knights/neospec/actions/workflows/goreleaser.yml)
-[![Go Report](https://goreportcard.com/badge/github.com/jedi-knights/neospec?style=flat)](https://goreportcard.com/report/github.com/jedi-knights/neospec)
+[![ReportCard](https://goreportcard.com/badge/github.com/jedi-knights/neospec?style=flat)](https://goreportcard.com/report/github.com/jedi-knights/neospec)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-![coverage](https://img.shields.io/badge/coverage-0.0%25-red)
+[![Badge](https://github.com/jedi-knights/neospec/actions/workflows/badge.yaml/badge.svg)](https://github.com/jedi-knights/neospec/actions/workflows/badge.yaml)
+![Coverage](https://img.shields.io/badge/Coverage-0.0%25-red)
 
 [Installation](#installation) · [Quickstart](#quickstart) · [Writing Tests](#writing-tests) · [Coverage](#coverage) · [GitHub Action](#github-action) · [Configuration](#configuration) · [Contributing](#contributing)
 

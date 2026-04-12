@@ -1,6 +1,6 @@
 name: neospec
 description: Run Lua tests and collect coverage for Neovim plugins and distributions.
-author: Jedi Knights
+author: jedi-knights
 
 branding:
   icon: check-circle
@@ -23,22 +23,24 @@ inputs:
     description: Comma-separated list of output formats (console, lcov, cobertura, coveralls, junit)
     required: false
     default: console
-  badge-patch:
-    description: Patch the coverage badge in README.md
-    required: false
-    default: "false"
-  readme-path:
-    description: Path to README.md for badge patching
-    required: false
-    default: README.md
   threshold:
-    description: Minimum required coverage percentage (fails if below)
+    description: Minimum required coverage percentage; "0" disables the check
     required: false
     default: "0"
   verbose:
-    description: Enable verbose output
+    description: Enable verbose output ("true" or "false")
     required: false
     default: "false"
+
+outputs:
+  coverage-percentage:
+    description: >
+      Coverage percentage as a bare number (e.g. "87.5"). Empty string when
+      the console format is not enabled and no coverage line is emitted.
+    value: ${{ steps.run-neospec.outputs.coverage-percentage }}
+  passed:
+    description: Whether the run passed all checks ("true" or "false")
+    value: ${{ steps.run-neospec.outputs.passed }}
 
 runs:
   using: composite
@@ -53,20 +55,24 @@ runs:
         case "$ARCH" in
           x86_64)          ARCH="amd64" ;;
           aarch64 | arm64) ARCH="arm64" ;;
-          *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;;
+          *) echo "::error::Unsupported architecture: $ARCH"; exit 1 ;;
         esac
 
-        # Resolve the version to install:
-        #   1. Use the action's own ref when it is a full semver tag (v1.2.3).
-        #   2. Otherwise fall back to the latest release from the GitHub API.
+        # Resolve the version to install.
+        # GITHUB_ACTION_REF is set by the runner to the ref used to call this
+        # action (e.g. "v1.2.3" or "v1"). Accept only a full semver tag; for
+        # everything else (branch names, SHAs, moving major tags) fall back to
+        # the latest published release so callers always get a real binary.
         VERSION="${GITHUB_ACTION_REF:-}"
         if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-          VERSION="$(curl -fsSL https://api.github.com/repos/jedi-knights/neospec/releases/latest \
+          VERSION="$(curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/jedi-knights/neospec/releases/latest \
             | grep '"tag_name"' | cut -d'"' -f4)"
         fi
 
         if [ -z "$VERSION" ]; then
-          echo "::error::Failed to resolve neospec version" >&2
+          echo "::error::Failed to resolve neospec version"
           exit 1
         fi
 
@@ -80,18 +86,37 @@ runs:
         echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
     - name: Run neospec
+      id: run-neospec
       shell: bash
       env:
         NEOSPEC_NEOVIM_VERSION: ${{ inputs.neovim-version }}
         NEOSPEC_TEST_PATTERNS: ${{ inputs.test-patterns }}
         NEOSPEC_COVERAGE_DIR: ${{ inputs.coverage-dir }}
         NEOSPEC_FORMATS: ${{ inputs.formats }}
-        NEOSPEC_BADGE_PATCH: ${{ inputs.badge-patch }}
-        NEOSPEC_README_PATH: ${{ inputs.readme-path }}
+        NEOSPEC_THRESHOLD: ${{ inputs.threshold }}
         NEOSPEC_VERBOSE: ${{ inputs.verbose }}
       run: |
+        set -euo pipefail
+
         THRESHOLD_FLAG=""
-        if [ "${{ inputs.threshold }}" != "0" ]; then
-          THRESHOLD_FLAG="--threshold=${{ inputs.threshold }}"
+        if [ "$NEOSPEC_THRESHOLD" != "0" ]; then
+          THRESHOLD_FLAG="--threshold=$NEOSPEC_THRESHOLD"
         fi
-        neospec run $THRESHOLD_FLAG
+
+        # Tee output so it appears in the runner log and can be parsed below.
+        OUTPUT_FILE="$RUNNER_TEMP/neospec_output.txt"
+        PASSED=true
+        # shellcheck disable=SC2086
+        if ! neospec run $THRESHOLD_FLAG 2>&1 | tee "$OUTPUT_FILE"; then
+          PASSED=false
+        fi
+
+        # Extract coverage percentage from the console reporter line, e.g.:
+        #   Coverage: 87.5% (175/200 lines)
+        # Empty when the console format is not in use.
+        PCT="$(grep -oE 'Coverage: [0-9]+\.[0-9]+%' "$OUTPUT_FILE" \
+          | grep -oE '[0-9]+\.[0-9]+' | head -1 || true)"
+        echo "coverage-percentage=${PCT:-}" >> "$GITHUB_OUTPUT"
+        echo "passed=${PASSED}" >> "$GITHUB_OUTPUT"
+
+        [ "$PASSED" = "true" ] || exit 1
