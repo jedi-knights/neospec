@@ -76,6 +76,17 @@ func TestCheckThreshold_ZeroThreshold(t *testing.T) {
 	}
 }
 
+// TestCheckThreshold_NilCov verifies that a nil CoverageData with a non-zero
+// threshold returns an error rather than panicking. The ports.TestRunner interface
+// does not prohibit a conforming implementation from returning a nil cov.
+func TestCheckThreshold_NilCov(t *testing.T) {
+	cfg := config.Config{Threshold: 50.0}
+	err := checkThreshold(cfg, nil)
+	if err == nil {
+		t.Error("checkThreshold() with nil cov and non-zero threshold should return error")
+	}
+}
+
 func TestApplyFlags_AllFlags(t *testing.T) {
 	cfg := config.Config{}
 	flags := &runFlags{
@@ -86,6 +97,7 @@ func TestApplyFlags_AllFlags(t *testing.T) {
 		threshold:     75.0,
 		cacheDir:      "/tmp/cache",
 		verbose:       true,
+		initFile:      "tests/init.lua",
 	}
 	applyFlags(&cfg, flags)
 
@@ -110,6 +122,35 @@ func TestApplyFlags_AllFlags(t *testing.T) {
 	if !cfg.Verbose {
 		t.Errorf("Verbose = false, want true")
 	}
+	if cfg.InitFile != "tests/init.lua" {
+		t.Errorf("InitFile = %q, want %q", cfg.InitFile, "tests/init.lua")
+	}
+}
+
+// TestApplyFlags_ZeroThresholdDoesNotOverride verifies that a zero --threshold
+// flag (the flag's default value when not supplied) does not override a non-zero
+// threshold already configured via TOML or env. The guard `flags.threshold > 0`
+// means zero is treated as "not set", so only positive values take effect.
+func TestApplyFlags_ZeroThresholdDoesNotOverride(t *testing.T) {
+	cfg := config.Config{Threshold: 70.0}
+	flags := &runFlags{threshold: 0}
+	applyFlags(&cfg, flags)
+	if cfg.Threshold != 70.0 {
+		t.Errorf("Threshold = %v, want 70.0 (zero flag should not override)", cfg.Threshold)
+	}
+}
+
+// TestApplyFlags_NegativeThreshold verifies that a negative --threshold flag
+// value does not overwrite the configured threshold. A user who sets
+// --threshold=-5 should not accidentally zero-out a TOML-configured threshold;
+// only strictly positive values are meaningful minimum-coverage targets.
+func TestApplyFlags_NegativeThreshold(t *testing.T) {
+	cfg := config.Config{Threshold: 80.0}
+	flags := &runFlags{threshold: -5.0}
+	applyFlags(&cfg, flags)
+	if cfg.Threshold != 80.0 {
+		t.Errorf("Threshold = %v, want 80.0 (negative flag should not override)", cfg.Threshold)
+	}
 }
 
 func TestApplyFlags_NoOverride(t *testing.T) {
@@ -125,6 +166,39 @@ func TestApplyFlags_NoOverride(t *testing.T) {
 	}
 	if cfg.CoverageDir != "coverage" {
 		t.Errorf("CoverageDir should not be overridden, got %q", cfg.CoverageDir)
+	}
+}
+
+func TestApplyFlags_InitFile(t *testing.T) {
+	cfg := config.Config{}
+	flags := &runFlags{initFile: "tests/minimal_init.lua"}
+	applyFlags(&cfg, flags)
+
+	if cfg.InitFile != "tests/minimal_init.lua" {
+		t.Errorf("InitFile = %q, want %q", cfg.InitFile, "tests/minimal_init.lua")
+	}
+}
+
+func TestApplyFlags_InitFileNotOverriddenWhenEmpty(t *testing.T) {
+	cfg := config.Config{InitFile: "pre-set.lua"}
+	flags := &runFlags{} // initFile is empty — should not clear the existing value
+	applyFlags(&cfg, flags)
+
+	if cfg.InitFile != "pre-set.lua" {
+		t.Errorf("InitFile = %q, want %q (should not be cleared by empty flag)", cfg.InitFile, "pre-set.lua")
+	}
+}
+
+// TestNewRunCmd_InitFileFlag verifies that the --init-file flag is registered
+// on the run command and can be set.
+func TestNewRunCmd_InitFileFlag(t *testing.T) {
+	cmd := NewRunCmd()
+	f := cmd.Flags().Lookup("init-file")
+	if f == nil {
+		t.Fatal("--init-file flag not registered on run command")
+	}
+	if f.DefValue != "" {
+		t.Errorf("--init-file default = %q, want empty string", f.DefValue)
 	}
 }
 
@@ -147,14 +221,17 @@ func TestReporterFor_FileFormats(t *testing.T) {
 
 	formats := []string{"lcov", "cobertura", "coveralls", "junit"}
 	for _, format := range formats {
-		format := format
 		t.Run(format, func(t *testing.T) {
 			r, f, err := reporterFor(format, cfg, false)
 			if err != nil {
 				t.Fatalf("reporterFor(%q) error: %v", format, err)
 			}
 			if f != nil {
-				t.Cleanup(func() { f.Close() })
+				t.Cleanup(func() {
+					if err := f.Close(); err != nil {
+						t.Errorf("closing %s report file: %v", format, err)
+					}
+				})
 			}
 			if r == nil {
 				t.Errorf("reporterFor(%q) returned nil reporter", format)
@@ -215,7 +292,6 @@ func TestReporterFor_FileFormats_CreateError(t *testing.T) {
 
 	formats := []string{"lcov", "cobertura", "coveralls", "junit"}
 	for _, format := range formats {
-		format := format
 		t.Run(format, func(t *testing.T) {
 			_, _, err := reporterFor(format, cfg, false)
 			if err == nil {
@@ -497,6 +573,57 @@ func TestExecuteTests_Verbose(t *testing.T) {
 	}
 	if _, _, err := executeTests(context.Background(), cfg, tr); err != nil {
 		t.Fatalf("executeTests() verbose error: %v", err)
+	}
+}
+
+// TestRunTests_InitFileThreadedToRunner verifies that cfg.InitFile is passed
+// through to the runner constructor. Because deps.testRunner bypasses the
+// constructor, this test uses deps.runnerFactory to intercept the call.
+func TestRunTests_InitFileThreadedToRunner(t *testing.T) {
+	var capturedInitFile string
+	var factoryCalled bool
+	flags := &runFlags{initFile: "tests/init.lua"}
+	deps := runDeps{
+		neovimProvider: &fakeNeovimProvider{path: "/fake/nvim"},
+		runnerFactory: func(_ string, _ bool, initFile string) ports.TestRunner {
+			factoryCalled = true
+			capturedInitFile = initFile
+			return &fakeTestRunner{files: []string{}}
+		},
+	}
+	// The fake runner returns no files so runTests exits cleanly at the
+	// "no test files found" branch. We only care that the factory was called
+	// with the right initFile, not the outcome of runTests.
+	if err := runTests(context.Background(), flags, deps); err != nil {
+		t.Fatalf("runTests() unexpected error: %v", err)
+	}
+	if !factoryCalled {
+		t.Fatal("runnerFactory was never called — runTests did not reach the factory branch")
+	}
+	if capturedInitFile != "tests/init.lua" {
+		t.Errorf("initFile = %q, want %q", capturedInitFile, "tests/init.lua")
+	}
+}
+
+// TestExecuteTests_EmptyCoverageDir verifies that executeTests returns an error
+// when CoverageDir is an invalid path. Uses a regular file as a path component
+// so os.MkdirAll fails on all platforms — more portable than relying on
+// os.MkdirAll("") failing, whose behavior is not guaranteed across platforms.
+func TestExecuteTests_EmptyCoverageDir(t *testing.T) {
+	dir := t.TempDir()
+	blockingFile := filepath.Join(dir, "not-a-dir")
+	if err := os.WriteFile(blockingFile, []byte("block"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	cfg := config.Config{CoverageDir: filepath.Join(blockingFile, "coverage")}
+	tr := &fakeTestRunner{
+		files: []string{"spec/a_spec.lua"},
+		suite: &domain.SuiteResult{},
+		cov:   &domain.CoverageData{},
+	}
+	_, _, err := executeTests(context.Background(), cfg, tr)
+	if err == nil {
+		t.Fatal("executeTests() expected error for invalid CoverageDir, got nil")
 	}
 }
 

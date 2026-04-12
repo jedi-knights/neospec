@@ -3,9 +3,12 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jedi-knights/neospec/internal/adapters/sandbox"
@@ -32,21 +35,21 @@ func (f *fakeCommandRunner) Run(_ context.Context, _ []string, _ string, _ ...st
 }
 
 func TestNew(t *testing.T) {
-	r := New("/usr/bin/nvim", sandbox.NewFactory(), realCommandRunner{}, false)
+	r := New("/usr/bin/nvim", sandbox.NewFactory(), realCommandRunner{}, false, "")
 	if r == nil {
 		t.Fatal("New() returned nil")
 	}
 }
 
 func TestNewWithDefaultSandbox(t *testing.T) {
-	r := NewWithDefaultSandbox("/usr/bin/nvim", true)
+	r := NewWithDefaultSandbox("/usr/bin/nvim", true, "")
 	if r == nil {
 		t.Fatal("NewWithDefaultSandbox() returned nil")
 	}
 }
 
 func TestRunner_Run_EmptyFiles(t *testing.T) {
-	r := New("/usr/bin/nvim", sandbox.NewFactory(), realCommandRunner{}, false)
+	r := New("/usr/bin/nvim", sandbox.NewFactory(), realCommandRunner{}, false, "")
 	suite, cov, err := r.Run(context.Background(), []string{})
 	if err != nil {
 		t.Fatalf("Run() with empty files error: %v", err)
@@ -75,7 +78,6 @@ func TestParseStatus(t *testing.T) {
 		{"", domain.StatusError},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.input, func(t *testing.T) {
 			if got := parseStatus(tc.input); got != tc.want {
 				t.Errorf("parseStatus(%q) = %v, want %v", tc.input, got, tc.want)
@@ -140,7 +142,7 @@ func TestParseOutput_InvalidJSON(t *testing.T) {
 }
 
 func TestRunner_Discover_Method(t *testing.T) {
-	r := New("/usr/bin/nvim", sandbox.NewFactory(), realCommandRunner{}, false)
+	r := New("/usr/bin/nvim", sandbox.NewFactory(), realCommandRunner{}, false, "")
 	files, err := r.Discover(context.Background(), []string{"/nonexistent/**"})
 	if err != nil {
 		t.Fatalf("Runner.Discover() error: %v", err)
@@ -163,7 +165,7 @@ func TestRunner_Run_BadNvimPath(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			r := New("/nonexistent/nvim-binary-that-does-not-exist", sandbox.NewFactory(), realCommandRunner{}, tc.verbose)
+			r := New("/nonexistent/nvim-binary-that-does-not-exist", sandbox.NewFactory(), realCommandRunner{}, tc.verbose, "")
 			testFile := createTempLuaFile(t)
 
 			suite, cov, err := r.Run(context.Background(), []string{testFile})
@@ -190,9 +192,10 @@ func TestRunner_Run_BadNvimPath(t *testing.T) {
 // TestRunner_Run_SandboxError covers the runOne sandbox-creation failure path.
 // Run() records the error as a StatusError test result rather than returning it.
 func TestRunner_Run_SandboxError(t *testing.T) {
-	r := New("/usr/bin/nvim", &errorSandboxFactory{}, realCommandRunner{}, false)
+	r := New("/usr/bin/nvim", &errorSandboxFactory{}, realCommandRunner{}, false, "")
 	testFile := createTempLuaFile(t)
 
+	// Coverage is not asserted here — this test focuses on the error recording path.
 	suite, _, err := r.Run(context.Background(), []string{testFile})
 	if err != nil {
 		t.Fatalf("Run() should not return error (sandbox errors are recorded in suite): %v", err)
@@ -216,7 +219,7 @@ func TestRunOne_FakeCommandRunner(t *testing.T) {
 		t.Fatalf("json.Marshal: %v", err)
 	}
 
-	r := New("/nvim", sandbox.NewFactory(), &fakeCommandRunner{stdout: raw}, false)
+	r := New("/nvim", sandbox.NewFactory(), &fakeCommandRunner{stdout: raw}, false, "")
 	testFile := createTempLuaFile(t)
 
 	suite, cov, err := r.runOne(context.Background(), testFile)
@@ -237,7 +240,7 @@ func TestRunOne_FakeCommandRunner(t *testing.T) {
 // TestRunOne_FakeCommandRunner_Error tests the runOne error path when the
 // command runner returns a non-zero exit.
 func TestRunOne_FakeCommandRunner_Error(t *testing.T) {
-	r := New("/nvim", sandbox.NewFactory(), &fakeCommandRunner{err: fmt.Errorf("exit status 1")}, false)
+	r := New("/nvim", sandbox.NewFactory(), &fakeCommandRunner{err: fmt.Errorf("exit status 1")}, false, "")
 	testFile := createTempLuaFile(t)
 
 	_, _, err := r.runOne(context.Background(), testFile)
@@ -288,7 +291,7 @@ func TestRunner_Run_Success(t *testing.T) {
 		t.Fatalf("json.Marshal: %v", err)
 	}
 
-	r := New("/nvim", sandbox.NewFactory(), &fakeCommandRunner{stdout: raw}, false)
+	r := New("/nvim", sandbox.NewFactory(), &fakeCommandRunner{stdout: raw}, false, "")
 	testFile := createTempLuaFile(t)
 
 	suite, cov, err := r.Run(context.Background(), []string{testFile})
@@ -313,7 +316,7 @@ func TestRunOne_WriteFileError(t *testing.T) {
 	// os.WriteFile("…/neospec_run.lua") fails.
 	nonexistentDir := filepath.Join(t.TempDir(), "deeply", "nonexistent", "dir")
 	sb := &fakeSandbox{dir: nonexistentDir}
-	r := New("/nvim", &fakeSandboxFactory{sb: sb}, &fakeCommandRunner{}, false)
+	r := New("/nvim", &fakeSandboxFactory{sb: sb}, &fakeCommandRunner{}, false, "")
 	testFile := createTempLuaFile(t)
 
 	_, _, err := r.runOne(context.Background(), testFile)
@@ -322,23 +325,233 @@ func TestRunOne_WriteFileError(t *testing.T) {
 	}
 }
 
-func TestParseOutput_InvalidLineNumber(t *testing.T) {
-	// If a line key is not a valid integer, it should be skipped rather than crash.
-	data := runOutput{
-		Coverage: []coverageJSON{
-			{Path: "lua/mod.lua", Lines: map[string]int{"notanumber": 1, "2": 5}},
-		},
+// TestRunner_Run_MultipleFiles verifies that Run aggregates results and coverage
+// from all files in the list, including files processed after the first one.
+// This is the critical invariant that must hold under parallel execution.
+func TestRunner_Run_MultipleFiles(t *testing.T) {
+	output := runOutput{
+		Tests:    []testJSON{{Name: "spec > passes", Status: "pass", DurationMs: 1.0}},
+		Coverage: []coverageJSON{{Path: "lua/mod.lua", Lines: map[string]int{"1": 2}}},
 	}
-	raw, err := json.Marshal(data)
+	raw, err := json.Marshal(output)
 	if err != nil {
 		t.Fatalf("json.Marshal: %v", err)
 	}
 
+	r := New("/nvim", sandbox.NewFactory(), &fakeCommandRunner{stdout: raw}, false, "")
+	files := []string{
+		createTempLuaFile(t),
+		createTempLuaFile(t),
+		createTempLuaFile(t),
+	}
+
+	suite, cov, err := r.Run(context.Background(), files)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if len(suite.Tests) != 3 {
+		t.Errorf("expected 3 tests (one per file), got %d", len(suite.Tests))
+	}
+	if len(cov.Files) != 3 {
+		t.Errorf("expected 3 coverage files (one per file), got %d", len(cov.Files))
+	}
+}
+
+// TestRunner_Run_MultipleFiles_PartialError verifies that an error in one file
+// does not suppress results from the other files — all files are executed
+// regardless of individual failures.
+func TestRunner_Run_MultipleFiles_PartialError(t *testing.T) {
+	goodOutput := runOutput{
+		Tests: []testJSON{{Name: "spec > passes", Status: "pass", DurationMs: 1.0}},
+	}
+	goodRaw, err := json.Marshal(goodOutput)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	// One runner that succeeds, one that errors — use the error sandbox path.
+	// Inject a failing sandbox for one file via a counting factory.
+	// Use the real factory for successes and error factory for the second call.
+	successFactory := sandbox.NewFactory()
+	errorFactory := &errorSandboxFactory{}
+	mixedFactory := &countingSandboxFactory{
+		factories: []ports.SandboxFactory{successFactory, errorFactory, successFactory},
+	}
+	r := New("/nvim", mixedFactory, &fakeCommandRunner{stdout: goodRaw}, false, "")
+	files := []string{
+		createTempLuaFile(t),
+		createTempLuaFile(t),
+		createTempLuaFile(t),
+	}
+
+	suite, _, err := r.Run(context.Background(), files)
+	if err != nil {
+		t.Fatalf("Run() should not return error — per-file errors are recorded in suite")
+	}
+	// 2 success tests + 1 error test result = 3 total
+	if len(suite.Tests) != 3 {
+		t.Errorf("expected 3 test results, got %d", len(suite.Tests))
+	}
+	var errorCount int
+	for _, test := range suite.Tests {
+		if test.Status == domain.StatusError {
+			errorCount++
+		}
+	}
+	if errorCount != 1 {
+		t.Errorf("expected exactly 1 error result, got %d", errorCount)
+	}
+}
+
+// countingSandboxFactory cycles through a list of SandboxFactory implementations
+// so each Create() call uses the next factory in the list. callCount is an
+// atomic int so the factory is safe to use from concurrent goroutines.
+type countingSandboxFactory struct {
+	factories []ports.SandboxFactory
+	callCount atomic.Int64
+}
+
+func (f *countingSandboxFactory) Create(ctx context.Context) (ports.Sandbox, error) {
+	i := int(f.callCount.Add(1)-1) % len(f.factories)
+	return f.factories[i].Create(ctx)
+}
+
+// TestRunner_Run_ContextCancelled verifies that Run propagates a cancelled
+// context as a non-nil error so callers can distinguish "the run was aborted"
+// from "all test files failed normally".
+//
+// NOTE: the worker's ctx.Err() check in executor.go is non-atomic — a worker
+// may pick up a job and call runOne before observing the cancellation. The only
+// guaranteed contract is that Run returns context.Canceled. Asserting
+// suite.Tests == 0 would be flaky under concurrent scheduling.
+func TestRunner_Run_ContextCancelled(t *testing.T) {
+	output := runOutput{
+		Tests: []testJSON{{Name: "spec > passes", Status: "pass", DurationMs: 1.0}},
+	}
+	raw, err := json.Marshal(output)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before Run is called
+
+	r := New("/nvim", sandbox.NewFactory(), &fakeCommandRunner{stdout: raw}, false, "")
+	files := []string{createTempLuaFile(t), createTempLuaFile(t)}
+
+	_, _, err = r.Run(ctx, files)
+	if err == nil {
+		t.Error("Run() should return non-nil error when context is already cancelled")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("expected context.Canceled, got %v", err)
+	}
+}
+
+// closingErrorSandbox is a fakeSandbox whose Close() always returns an error.
+// Used to verify that runOne propagates sandbox cleanup failures.
+type closingErrorSandbox struct {
+	fakeSandbox
+}
+
+func (s *closingErrorSandbox) Close() error { return fmt.Errorf("simulated close failure") }
+
+// TestRunOne_CloseError verifies that a non-nil error from sb.Close() is
+// propagated by runOne so that temp-dir leaks surface as visible failures
+// rather than being silently discarded.
+func TestRunOne_CloseError(t *testing.T) {
+	output := runOutput{
+		Tests: []testJSON{{Name: "a > test", Status: "pass", DurationMs: 1.0}},
+	}
+	raw, err := json.Marshal(output)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	sb := &closingErrorSandbox{fakeSandbox{dir: t.TempDir()}}
+	r := New("/nvim", &fakeSandboxFactory{sb: sb}, &fakeCommandRunner{stdout: raw}, false, "")
+
+	_, _, err = r.runOne(context.Background(), createTempLuaFile(t))
+	if err == nil {
+		t.Fatal("runOne() expected error from Close(), got nil")
+	}
+	if !strings.Contains(err.Error(), "closing sandbox") {
+		t.Errorf("error = %q, want to contain %q", err.Error(), "closing sandbox")
+	}
+}
+
+// TestRunner_Run_CloseError verifies that a sandbox Close() error is recorded
+// as a StatusError test result in Run's aggregated output, not silently
+// discarded. This exercises the path where runOne returns an error (via the
+// named-return close error) and Run records it in the suite.
+func TestRunner_Run_CloseError(t *testing.T) {
+	output := runOutput{
+		Tests: []testJSON{{Name: "a > test", Status: "pass", DurationMs: 1.0}},
+	}
+	raw, err := json.Marshal(output)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	sb := &closingErrorSandbox{fakeSandbox{dir: t.TempDir()}}
+	r := New("/nvim", &fakeSandboxFactory{sb: sb}, &fakeCommandRunner{stdout: raw}, false, "")
+
+	suite, _, err := r.Run(context.Background(), []string{createTempLuaFile(t)})
+	if err != nil {
+		t.Fatalf("Run() should not return error (errors are recorded in suite): %v", err)
+	}
+	if len(suite.Tests) != 1 {
+		t.Fatalf("expected 1 test result, got %d", len(suite.Tests))
+	}
+	if suite.Tests[0].Status != domain.StatusError {
+		t.Errorf("expected StatusError, got %v", suite.Tests[0].Status)
+	}
+	if !strings.Contains(suite.Tests[0].Error, "closing sandbox") {
+		t.Errorf("error = %q, want to contain %q", suite.Tests[0].Error, "closing sandbox")
+	}
+}
+
+func TestParseOutput_EmptyLinesArray(t *testing.T) {
+	raw := []byte(`{"tests":[],"coverage":[{"path":"lua/mod.lua","lines":[]}]}`)
 	_, cov, err := parseOutput(raw)
 	if err != nil {
-		t.Fatalf("parseOutput() unexpected error: %v", err)
+		t.Fatalf("parseOutput() error on empty lines array: %v", err)
 	}
-	if cov.Files[0].Lines[2] != 5 {
-		t.Errorf("expected line 2 = 5, got %d", cov.Files[0].Lines[2])
+	if len(cov.Files) != 0 {
+		t.Errorf("expected 0 coverage files (empty lines entry skipped), got %d", len(cov.Files))
+	}
+}
+
+func TestParseOutput_InvalidLineNumber(t *testing.T) {
+	// A non-numeric line key indicates corrupted harness output; parseOutput
+	// must return an error. Use a single bad key so the test is unconditional
+	// regardless of map iteration order.
+	raw := []byte(`{"tests":[],"coverage":[{"path":"lua/mod.lua","lines":{"notanumber":1}}]}`)
+	_, _, err := parseOutput(raw)
+	if err == nil {
+		t.Error("parseOutput() expected error for non-numeric line key, got nil")
+	}
+}
+
+// TestParseOutput_PartialNumericLineKey verifies that parseOutput rejects a line
+// key like "42abc" — a partial-numeric string that fmt.Sscan would silently
+// truncate to 42 but strconv.Atoi correctly rejects. Corrupted harness output
+// with such keys must surface as an error, not silently record the wrong line.
+func TestParseOutput_PartialNumericLineKey(t *testing.T) {
+	raw := []byte(`{"tests":[],"coverage":[{"path":"lua/mod.lua","lines":{"42abc":1}}]}`)
+	_, _, err := parseOutput(raw)
+	if err == nil {
+		t.Error("parseOutput() expected error for partial-numeric line key \"42abc\", got nil")
+	}
+}
+
+// TestParseOutput_LuaReporterError verifies that parseOutput returns an error
+// when the Lua reporter emits an "error" field in its JSON output. reporter.lua's
+// pcall guard writes {"tests":[],"coverage":[],"error":"..."} when the
+// serialisation fails; without this check the Go consumer sees a successful
+// run with zero tests instead of a surfaced error.
+func TestParseOutput_LuaReporterError(t *testing.T) {
+	raw := []byte(`{"tests":[],"coverage":[],"error":"pcall failed: attempt to index nil"}`)
+	_, _, err := parseOutput(raw)
+	if err == nil {
+		t.Error("parseOutput() expected error when Lua reporter emits an error field, got nil")
 	}
 }

@@ -223,7 +223,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: jedi-knights/neospec@v1
+      - uses: jedi-knights/neospec@v0
         with:
           neovim-version: stable      # stable | nightly | v0.10.4
           formats: console,lcov       # comma-separated

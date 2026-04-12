@@ -12,6 +12,7 @@ func TestBadgeColor(t *testing.T) {
 		pct   float64
 		color string
 	}{
+		{100, "brightgreen"},
 		{95, "brightgreen"},
 		{90, "brightgreen"},
 		{89, "green"},
@@ -24,7 +25,6 @@ func TestBadgeColor(t *testing.T) {
 		{0, "red"},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(fmt.Sprintf("pct=%.0f", tc.pct), func(t *testing.T) {
 			if got := domain.BadgeColor(tc.pct); got != tc.color {
 				t.Errorf("BadgeColor(%.0f) = %q, want %q", tc.pct, got, tc.color)
@@ -44,7 +44,6 @@ func TestBadgeLabel(t *testing.T) {
 		{33.333, "33.3%"},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.want, func(t *testing.T) {
 			if got := domain.BadgeLabel(tc.pct); got != tc.want {
 				t.Errorf("BadgeLabel(%v) = %q, want %q", tc.pct, got, tc.want)

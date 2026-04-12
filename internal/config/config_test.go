@@ -66,7 +66,8 @@ func TestLoad_Defaults(t *testing.T) {
 	// Clear env vars that would override defaults.
 	for _, key := range []string{
 		"NEOSPEC_NEOVIM_VERSION", "NEOSPEC_TEST_PATTERNS", "NEOSPEC_COVERAGE_DIR",
-		"NEOSPEC_FORMATS", "NEOSPEC_CACHE_DIR", "NEOSPEC_VERBOSE",
+		"NEOSPEC_FORMATS", "NEOSPEC_CACHE_DIR", "NEOSPEC_VERBOSE", "NEOSPEC_INIT_FILE",
+		"NEOSPEC_THRESHOLD",
 	} {
 		t.Setenv(key, "")
 	}
@@ -94,6 +95,9 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.Verbose {
 		t.Errorf("Verbose = true, want false")
 	}
+	if cfg.InitFile != "" {
+		t.Errorf("InitFile = %q, want empty string", cfg.InitFile)
+	}
 }
 
 // TestLoad_TOMLFile checks that a TOML config file is read and merged correctly.
@@ -107,15 +111,19 @@ coverage_dir = "cov"
 formats = ["lcov", "junit"]
 threshold = 75.0
 verbose = true
+init_file = "tests/minimal_init.lua"
 `
 	if err := os.WriteFile(tomlPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("writing TOML: %v", err)
 	}
 
-	// Clear env overrides.
+	// Clear env overrides so TOML values are not masked by the test environment.
+	// NEOSPEC_CACHE_DIR must be cleared too — if it is set in the outer environment,
+	// the TOML's (absent) cache_dir would be silently overridden by the env var.
 	for _, key := range []string{
 		"NEOSPEC_NEOVIM_VERSION", "NEOSPEC_TEST_PATTERNS", "NEOSPEC_COVERAGE_DIR",
-		"NEOSPEC_FORMATS", "NEOSPEC_CACHE_DIR", "NEOSPEC_VERBOSE",
+		"NEOSPEC_FORMATS", "NEOSPEC_CACHE_DIR", "NEOSPEC_VERBOSE", "NEOSPEC_INIT_FILE",
+		"NEOSPEC_THRESHOLD",
 	} {
 		t.Setenv(key, "")
 	}
@@ -143,10 +151,20 @@ verbose = true
 	if !cfg.Verbose {
 		t.Errorf("Verbose = false, want true")
 	}
+	if cfg.InitFile != "tests/minimal_init.lua" {
+		t.Errorf("InitFile = %q, want %q", cfg.InitFile, "tests/minimal_init.lua")
+	}
 }
 
 // TestLoad_TOMLMissing checks that a missing TOML file is silently ignored.
 func TestLoad_TOMLMissing(t *testing.T) {
+	for _, key := range []string{
+		"NEOSPEC_NEOVIM_VERSION", "NEOSPEC_TEST_PATTERNS", "NEOSPEC_COVERAGE_DIR",
+		"NEOSPEC_FORMATS", "NEOSPEC_CACHE_DIR", "NEOSPEC_VERBOSE", "NEOSPEC_INIT_FILE",
+		"NEOSPEC_THRESHOLD",
+	} {
+		t.Setenv(key, "")
+	}
 	cfg, err := Load("/nonexistent/path/neospec.toml")
 	if err != nil {
 		t.Errorf("Load() on missing file should not error, got: %v", err)
@@ -177,6 +195,10 @@ func TestLoad_EnvVarOverrides(t *testing.T) {
 	t.Setenv("NEOSPEC_FORMATS", "cobertura,coveralls")
 	t.Setenv("NEOSPEC_CACHE_DIR", "/tmp/cache")
 	t.Setenv("NEOSPEC_VERBOSE", "true")
+	t.Setenv("NEOSPEC_INIT_FILE", "/env/init.lua")
+	// NEOSPEC_THRESHOLD is not under test here; clear it with the others so
+	// an ambient env var does not bleed into an unrelated assertion.
+	t.Setenv("NEOSPEC_THRESHOLD", "")
 
 	cfg, err := Load("")
 	if err != nil {
@@ -201,6 +223,29 @@ func TestLoad_EnvVarOverrides(t *testing.T) {
 	if !cfg.Verbose {
 		t.Errorf("Verbose = false, want true")
 	}
+	if cfg.InitFile != "/env/init.lua" {
+		t.Errorf("InitFile = %q, want %q", cfg.InitFile, "/env/init.lua")
+	}
+}
+
+// TestLoad_EnvThresholdOverride checks that NEOSPEC_THRESHOLD overrides the
+// default threshold value.
+func TestLoad_EnvThresholdOverride(t *testing.T) {
+	t.Setenv("NEOSPEC_THRESHOLD", "80.5")
+	for _, key := range []string{
+		"NEOSPEC_NEOVIM_VERSION", "NEOSPEC_TEST_PATTERNS", "NEOSPEC_COVERAGE_DIR",
+		"NEOSPEC_FORMATS", "NEOSPEC_CACHE_DIR", "NEOSPEC_VERBOSE", "NEOSPEC_INIT_FILE",
+	} {
+		t.Setenv(key, "")
+	}
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Threshold != 80.5 {
+		t.Errorf("Threshold = %v, want 80.5", cfg.Threshold)
+	}
 }
 
 // TestLoad_TOMLReadError checks that a non-NotExist error from reading the TOML
@@ -215,16 +260,120 @@ func TestLoad_TOMLReadError(t *testing.T) {
 }
 
 // TestLoad_EnvVerboseFalseOverridesDefault checks that NEOSPEC_VERBOSE=false
-// overrides a true value already set (e.g. from a TOML file) by applyEnv.
+// overrides a true value set in a TOML file. This test uses the full Load path
+// (TOML → env) to verify that the env override propagates through the call chain.
 func TestLoad_EnvVerboseFalseOverridesDefault(t *testing.T) {
-	// Set verbose to true via an env var first, then override it to false.
-	// We test via applyEnv directly since Load always starts from defaults (false).
-	// Seed a config with Verbose=true (as if loaded from TOML).
-	cfg := Config{Verbose: true}
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "neospec.toml")
+	if err := os.WriteFile(tomlPath, []byte("verbose = true\n"), 0o644); err != nil {
+		t.Fatalf("writing TOML: %v", err)
+	}
 	t.Setenv("NEOSPEC_VERBOSE", "false")
-	applyEnv(&cfg)
+
+	cfg, err := Load(tomlPath)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
 	if cfg.Verbose {
-		t.Error("Verbose = true, want false when NEOSPEC_VERBOSE=false")
+		t.Error("Verbose = true, want false when NEOSPEC_VERBOSE=false overrides TOML verbose=true")
+	}
+}
+
+// TestLoad_VerboseMalformed checks that an unrecognised NEOSPEC_VERBOSE value
+// returns an error rather than silently evaluating to false. This is consistent
+// with how NEOSPEC_THRESHOLD treats unparseable values. Values like "yes" or
+// "TRUE" (case-sensitive mismatch) must not silently misconfigure the run.
+func TestLoad_VerboseMalformed(t *testing.T) {
+	t.Setenv("NEOSPEC_VERBOSE", "yes")
+	for _, key := range []string{
+		"NEOSPEC_NEOVIM_VERSION", "NEOSPEC_TEST_PATTERNS", "NEOSPEC_COVERAGE_DIR",
+		"NEOSPEC_FORMATS", "NEOSPEC_CACHE_DIR", "NEOSPEC_INIT_FILE", "NEOSPEC_THRESHOLD",
+	} {
+		t.Setenv(key, "")
+	}
+	_, err := Load("")
+	if err == nil {
+		t.Error("Load() with NEOSPEC_VERBOSE=yes should return error, got nil")
+	}
+}
+
+// TestLoad_EnvVarSplitTrimmed checks that individual entries in
+// comma-delimited environment variables have whitespace stripped. A value like
+// "lcov, junit" (space after comma) should produce ["lcov", "junit"], not
+// ["lcov", " junit"] — the latter would not match any known format name.
+func TestLoad_EnvVarSplitTrimmed(t *testing.T) {
+	t.Setenv("NEOSPEC_FORMATS", " lcov , junit ")
+	for _, key := range []string{
+		"NEOSPEC_NEOVIM_VERSION", "NEOSPEC_TEST_PATTERNS", "NEOSPEC_COVERAGE_DIR",
+		"NEOSPEC_CACHE_DIR", "NEOSPEC_VERBOSE", "NEOSPEC_INIT_FILE", "NEOSPEC_THRESHOLD",
+	} {
+		t.Setenv(key, "")
+	}
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if len(cfg.Formats) != 2 || cfg.Formats[0] != "lcov" || cfg.Formats[1] != "junit" {
+		t.Errorf("Formats = %v, want [lcov junit] (whitespace should be trimmed from split entries)", cfg.Formats)
+	}
+}
+
+// TestLoad_EnvVarTrimmed checks that leading and trailing whitespace in
+// environment variable values is stripped before parsing. CI pipelines (e.g.
+// GitHub Actions env: blocks) occasionally inject trailing newlines or spaces
+// from shell interpolation, which would cause strconv.ParseFloat to fail with a
+// confusing error message instead of the expected behavior.
+func TestLoad_EnvVarTrimmed(t *testing.T) {
+	t.Setenv("NEOSPEC_THRESHOLD", " 80.5 ")
+	for _, key := range []string{
+		"NEOSPEC_NEOVIM_VERSION", "NEOSPEC_TEST_PATTERNS", "NEOSPEC_COVERAGE_DIR",
+		"NEOSPEC_FORMATS", "NEOSPEC_CACHE_DIR", "NEOSPEC_VERBOSE", "NEOSPEC_INIT_FILE",
+	} {
+		t.Setenv(key, "")
+	}
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() with whitespace-padded NEOSPEC_THRESHOLD should not error, got: %v", err)
+	}
+	if cfg.Threshold != 80.5 {
+		t.Errorf("Threshold = %v, want 80.5 (whitespace should be trimmed)", cfg.Threshold)
+	}
+}
+
+// TestLoad_EnvVarSplitTrimmed_TrailingComma checks that a trailing comma in a
+// comma-separated env var does not produce an empty string element. "lcov," should
+// yield ["lcov"], not ["lcov", ""] — an empty element would fail format matching
+// at runtime with an unhelpful "unknown format" error.
+func TestLoad_EnvVarSplitTrimmed_TrailingComma(t *testing.T) {
+	t.Setenv("NEOSPEC_FORMATS", "lcov,")
+	for _, key := range []string{
+		"NEOSPEC_NEOVIM_VERSION", "NEOSPEC_TEST_PATTERNS", "NEOSPEC_COVERAGE_DIR",
+		"NEOSPEC_CACHE_DIR", "NEOSPEC_VERBOSE", "NEOSPEC_INIT_FILE", "NEOSPEC_THRESHOLD",
+	} {
+		t.Setenv(key, "")
+	}
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if len(cfg.Formats) != 1 || cfg.Formats[0] != "lcov" {
+		t.Errorf("Formats = %v, want [lcov] (trailing comma should not produce empty element)", cfg.Formats)
+	}
+}
+
+// TestLoad_EnvThresholdMalformed checks that a non-numeric NEOSPEC_THRESHOLD
+// returns an error rather than silently using the default value.
+func TestLoad_EnvThresholdMalformed(t *testing.T) {
+	t.Setenv("NEOSPEC_THRESHOLD", "eighty")
+	for _, key := range []string{
+		"NEOSPEC_NEOVIM_VERSION", "NEOSPEC_TEST_PATTERNS", "NEOSPEC_COVERAGE_DIR",
+		"NEOSPEC_FORMATS", "NEOSPEC_CACHE_DIR", "NEOSPEC_VERBOSE", "NEOSPEC_INIT_FILE",
+	} {
+		t.Setenv(key, "")
+	}
+	_, err := Load("")
+	if err == nil {
+		t.Error("Load() with malformed NEOSPEC_THRESHOLD should return error")
 	}
 }
 
@@ -234,7 +383,7 @@ func TestLoad_EnvVerboseFlagOne(t *testing.T) {
 	// Clear others
 	for _, key := range []string{
 		"NEOSPEC_NEOVIM_VERSION", "NEOSPEC_TEST_PATTERNS", "NEOSPEC_COVERAGE_DIR",
-		"NEOSPEC_FORMATS", "NEOSPEC_CACHE_DIR",
+		"NEOSPEC_FORMATS", "NEOSPEC_CACHE_DIR", "NEOSPEC_INIT_FILE", "NEOSPEC_THRESHOLD",
 	} {
 		t.Setenv(key, "")
 	}
@@ -245,5 +394,67 @@ func TestLoad_EnvVerboseFlagOne(t *testing.T) {
 	}
 	if !cfg.Verbose {
 		t.Errorf("Verbose = false, want true for NEOSPEC_VERBOSE=1")
+	}
+}
+
+// TestLoad_InitFileDefault checks that InitFile defaults to empty string.
+func TestLoad_InitFileDefault(t *testing.T) {
+	for _, key := range []string{
+		"NEOSPEC_NEOVIM_VERSION", "NEOSPEC_TEST_PATTERNS", "NEOSPEC_COVERAGE_DIR",
+		"NEOSPEC_FORMATS", "NEOSPEC_CACHE_DIR", "NEOSPEC_VERBOSE", "NEOSPEC_INIT_FILE",
+		"NEOSPEC_THRESHOLD",
+	} {
+		t.Setenv(key, "")
+	}
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.InitFile != "" {
+		t.Errorf("InitFile = %q, want empty string by default", cfg.InitFile)
+	}
+}
+
+// TestLoad_InitFileTOML checks that init_file is read from a TOML config.
+func TestLoad_InitFileTOML(t *testing.T) {
+	dir := t.TempDir()
+	tomlPath := filepath.Join(dir, "neospec.toml")
+	content := `init_file = "tests/minimal_init.lua"`
+	if err := os.WriteFile(tomlPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing TOML: %v", err)
+	}
+	for _, key := range []string{
+		"NEOSPEC_NEOVIM_VERSION", "NEOSPEC_TEST_PATTERNS", "NEOSPEC_COVERAGE_DIR",
+		"NEOSPEC_FORMATS", "NEOSPEC_CACHE_DIR", "NEOSPEC_VERBOSE", "NEOSPEC_INIT_FILE",
+		"NEOSPEC_THRESHOLD",
+	} {
+		t.Setenv(key, "")
+	}
+
+	cfg, err := Load(tomlPath)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.InitFile != "tests/minimal_init.lua" {
+		t.Errorf("InitFile = %q, want %q", cfg.InitFile, "tests/minimal_init.lua")
+	}
+}
+
+// TestLoad_InitFileEnvVar checks that NEOSPEC_INIT_FILE overrides the TOML value.
+func TestLoad_InitFileEnvVar(t *testing.T) {
+	for _, key := range []string{
+		"NEOSPEC_NEOVIM_VERSION", "NEOSPEC_TEST_PATTERNS", "NEOSPEC_COVERAGE_DIR",
+		"NEOSPEC_FORMATS", "NEOSPEC_CACHE_DIR", "NEOSPEC_VERBOSE", "NEOSPEC_THRESHOLD",
+	} {
+		t.Setenv(key, "")
+	}
+	t.Setenv("NEOSPEC_INIT_FILE", "/env/init.lua")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.InitFile != "/env/init.lua" {
+		t.Errorf("InitFile = %q, want %q", cfg.InitFile, "/env/init.lua")
 	}
 }
