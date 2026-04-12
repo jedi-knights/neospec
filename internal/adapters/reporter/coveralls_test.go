@@ -59,6 +59,15 @@ func TestCoveralls_Write_WithCoverage(t *testing.T) {
 	}
 }
 
+// TestCoveralls_Write_WriteError covers the fmt.Fprintln error return path.
+func TestCoveralls_Write_WriteError(t *testing.T) {
+	r := reporter.NewCoveralls()
+	err := r.Write(context.Background(), failingWriter{}, &domain.SuiteResult{}, nil)
+	if err == nil {
+		t.Fatal("Write() expected error on write failure, got nil")
+	}
+}
+
 func TestCoveralls_Write_SkipsEmptyFile(t *testing.T) {
 	cov := &domain.CoverageData{
 		Files: []*domain.FileCoverage{

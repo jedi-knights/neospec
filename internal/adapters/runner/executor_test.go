@@ -256,6 +256,72 @@ func createTempLuaFile(t *testing.T) string {
 	return path
 }
 
+// fakeSandbox is a Sandbox that returns a caller-controlled Dir value.
+// Used to inject a nonexistent directory path and trigger os.WriteFile failures.
+type fakeSandbox struct {
+	dir string
+}
+
+func (s *fakeSandbox) Env() []string { return nil }
+func (s *fakeSandbox) Dir() string   { return s.dir }
+func (s *fakeSandbox) Close() error  { return nil }
+
+// fakeSandboxFactory always returns the provided fakeSandbox.
+type fakeSandboxFactory struct {
+	sb ports.Sandbox
+}
+
+func (f *fakeSandboxFactory) Create(_ context.Context) (ports.Sandbox, error) {
+	return f.sb, nil
+}
+
+// TestRunner_Run_Success tests the success path of Run where runOne succeeds
+// and results are appended to the suite and coverage. This covers the
+// suite.Tests append and cov.Files append branches.
+func TestRunner_Run_Success(t *testing.T) {
+	output := runOutput{
+		Tests:    []testJSON{{Name: "my > test", Status: "pass", DurationMs: 1.0}},
+		Coverage: []coverageJSON{{Path: "lua/mod.lua", Lines: map[string]int{"1": 3}}},
+	}
+	raw, err := json.Marshal(output)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	r := New("/nvim", sandbox.NewFactory(), &fakeCommandRunner{stdout: raw}, false)
+	testFile := createTempLuaFile(t)
+
+	suite, cov, err := r.Run(context.Background(), []string{testFile})
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if len(suite.Tests) != 1 {
+		t.Fatalf("expected 1 test, got %d", len(suite.Tests))
+	}
+	if suite.Tests[0].Status != domain.StatusPass {
+		t.Errorf("expected StatusPass, got %v", suite.Tests[0].Status)
+	}
+	if len(cov.Files) != 1 {
+		t.Errorf("expected 1 coverage file, got %d", len(cov.Files))
+	}
+}
+
+// TestRunOne_WriteFileError tests the os.WriteFile error path in runOne.
+// A sandbox that returns a nonexistent directory causes the shim write to fail.
+func TestRunOne_WriteFileError(t *testing.T) {
+	// Point the sandbox dir at a path whose parent does not exist so
+	// os.WriteFile("…/neospec_run.lua") fails.
+	nonexistentDir := filepath.Join(t.TempDir(), "deeply", "nonexistent", "dir")
+	sb := &fakeSandbox{dir: nonexistentDir}
+	r := New("/nvim", &fakeSandboxFactory{sb: sb}, &fakeCommandRunner{}, false)
+	testFile := createTempLuaFile(t)
+
+	_, _, err := r.runOne(context.Background(), testFile)
+	if err == nil {
+		t.Fatal("runOne() expected error when shim WriteFile fails, got nil")
+	}
+}
+
 func TestParseOutput_InvalidLineNumber(t *testing.T) {
 	// If a line key is not a valid integer, it should be skipped rather than crash.
 	data := runOutput{

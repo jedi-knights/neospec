@@ -53,3 +53,30 @@ func TestFactory_Create_MkdirAllError(t *testing.T) {
 		t.Fatal("Create() expected error when MkdirAll fails, got nil")
 	}
 }
+
+// errorMkdirAllAndRemoveAll is an fsOps that fails on both MkdirAll and RemoveAll,
+// exercising the errors.Join branch in Factory.Create.
+type errorMkdirAllAndRemoveAll struct {
+	dir string
+}
+
+func (e *errorMkdirAllAndRemoveAll) MkdirTemp(_, _ string) (string, error) {
+	return e.dir, nil
+}
+func (*errorMkdirAllAndRemoveAll) MkdirAll(_ string, _ os.FileMode) error {
+	return fmt.Errorf("simulated MkdirAll failure")
+}
+func (*errorMkdirAllAndRemoveAll) RemoveAll(_ string) error {
+	return fmt.Errorf("simulated RemoveAll failure")
+}
+
+// TestFactory_Create_MkdirAllAndRemoveAllError covers the errors.Join path
+// when MkdirAll fails AND the subsequent RemoveAll cleanup also fails.
+func TestFactory_Create_MkdirAllAndRemoveAllError(t *testing.T) {
+	tmpDir := t.TempDir()
+	f := &Factory{fs: &errorMkdirAllAndRemoveAll{dir: tmpDir}}
+	_, err := f.Create(context.Background())
+	if err == nil {
+		t.Fatal("Create() expected joined error when both MkdirAll and RemoveAll fail, got nil")
+	}
+}

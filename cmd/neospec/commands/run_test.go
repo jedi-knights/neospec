@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/jedi-knights/neospec/internal/config"
@@ -348,5 +349,174 @@ func TestRunTests_NeovimProviderError(t *testing.T) {
 	err := runTests(context.Background(), flags, deps)
 	if err == nil {
 		t.Fatal("runTests() expected error, got nil")
+	}
+}
+
+// TestRunTests_ConfigLoadError exercises the config.Load error branch.
+func TestRunTests_ConfigLoadError(t *testing.T) {
+	// Pass a directory as the config path — os.ReadFile returns an error that is
+	// not os.IsNotExist, so loadTOML propagates it.
+	flags := &runFlags{configPath: t.TempDir()}
+	err := runTests(context.Background(), flags, runDeps{
+		neovimProvider: &fakeNeovimProvider{path: "/fake/nvim"},
+	})
+	if err == nil {
+		t.Fatal("runTests() expected config load error, got nil")
+	}
+}
+
+// TestRunTests_ParseVersionError exercises the domain.ParseVersion error branch.
+func TestRunTests_ParseVersionError(t *testing.T) {
+	flags := &runFlags{neovimVersion: "not-a-valid-version!!!"}
+	err := runTests(context.Background(), flags, runDeps{
+		neovimProvider: &fakeNeovimProvider{path: "/fake/nvim"},
+	})
+	if err == nil {
+		t.Fatal("runTests() expected version parse error, got nil")
+	}
+}
+
+// TestRunTests_ExecuteTestsError exercises the executeTests error branch.
+func TestRunTests_ExecuteTestsError(t *testing.T) {
+	flags := &runFlags{}
+	deps := runDeps{
+		neovimProvider: &fakeNeovimProvider{path: "/fake/nvim"},
+		testRunner:     &fakeTestRunner{discoverErr: fmt.Errorf("glob failed")},
+	}
+	err := runTests(context.Background(), flags, deps)
+	if err == nil {
+		t.Fatal("runTests() expected executeTests error, got nil")
+	}
+}
+
+// TestRunTests_NoFiles exercises the suite==nil early-return path.
+func TestRunTests_NoFiles(t *testing.T) {
+	flags := &runFlags{}
+	deps := runDeps{
+		neovimProvider: &fakeNeovimProvider{path: "/fake/nvim"},
+		testRunner:     &fakeTestRunner{files: []string{}},
+	}
+	if err := runTests(context.Background(), flags, deps); err != nil {
+		t.Fatalf("runTests() expected nil when no files found, got: %v", err)
+	}
+}
+
+// TestRunTests_EmitReportsError exercises the emitReports error branch by using
+// an unknown format so reporterFor fails inside emitReports.
+func TestRunTests_EmitReportsError(t *testing.T) {
+	dir := t.TempDir()
+	flags := &runFlags{
+		formats:     []string{"unknown-format"},
+		coverageDir: dir,
+	}
+	deps := runDeps{
+		neovimProvider: &fakeNeovimProvider{path: "/fake/nvim"},
+		testRunner: &fakeTestRunner{
+			files: []string{"spec/a_spec.lua"},
+			suite: &domain.SuiteResult{Tests: []domain.TestResult{{Name: "a", Status: domain.StatusPass}}},
+			cov:   &domain.CoverageData{},
+		},
+	}
+	err := runTests(context.Background(), flags, deps)
+	if err == nil {
+		t.Fatal("runTests() expected emitReports error, got nil")
+	}
+}
+
+// TestRunTests_ThresholdFailed exercises the checkThreshold error branch.
+func TestRunTests_ThresholdFailed(t *testing.T) {
+	dir := t.TempDir()
+	flags := &runFlags{
+		threshold:   80.0,
+		formats:     []string{"console"},
+		coverageDir: dir,
+	}
+	deps := runDeps{
+		neovimProvider: &fakeNeovimProvider{path: "/fake/nvim"},
+		testRunner: &fakeTestRunner{
+			files: []string{"spec/a_spec.lua"},
+			suite: &domain.SuiteResult{Tests: []domain.TestResult{{Name: "a", Status: domain.StatusPass}}},
+			cov:   &domain.CoverageData{}, // 0% coverage
+		},
+	}
+	err := runTests(context.Background(), flags, deps)
+	if err == nil {
+		t.Fatal("runTests() expected threshold error, got nil")
+	}
+}
+
+// TestRunTests_SuiteFailed exercises the suite.Passed() == false error branch.
+func TestRunTests_SuiteFailed(t *testing.T) {
+	dir := t.TempDir()
+	flags := &runFlags{
+		formats:     []string{"console"},
+		coverageDir: dir,
+	}
+	deps := runDeps{
+		neovimProvider: &fakeNeovimProvider{path: "/fake/nvim"},
+		testRunner: &fakeTestRunner{
+			files: []string{"spec/a_spec.lua"},
+			suite: &domain.SuiteResult{Tests: []domain.TestResult{{Name: "a", Status: domain.StatusFail}}},
+			cov:   &domain.CoverageData{},
+		},
+	}
+	err := runTests(context.Background(), flags, deps)
+	if err == nil {
+		t.Fatal("runTests() expected suite-failed error, got nil")
+	}
+}
+
+// TestRunTests_Success exercises the full happy path returning nil.
+func TestRunTests_Success(t *testing.T) {
+	dir := t.TempDir()
+	flags := &runFlags{
+		formats:     []string{"console"},
+		coverageDir: dir,
+	}
+	deps := runDeps{
+		neovimProvider: &fakeNeovimProvider{path: "/fake/nvim"},
+		testRunner: &fakeTestRunner{
+			files: []string{"spec/a_spec.lua"},
+			suite: &domain.SuiteResult{Tests: []domain.TestResult{{Name: "a", Status: domain.StatusPass}}},
+			cov:   &domain.CoverageData{},
+		},
+	}
+	if err := runTests(context.Background(), flags, deps); err != nil {
+		t.Fatalf("runTests() expected success, got: %v", err)
+	}
+}
+
+// TestExecuteTests_Verbose exercises the verbose-print branch when files are found.
+func TestExecuteTests_Verbose(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Config{CoverageDir: dir, Verbose: true}
+	tr := &fakeTestRunner{
+		files: []string{"spec/a_spec.lua"},
+		suite: &domain.SuiteResult{},
+		cov:   &domain.CoverageData{},
+	}
+	if _, _, err := executeTests(context.Background(), cfg, tr); err != nil {
+		t.Fatalf("executeTests() verbose error: %v", err)
+	}
+}
+
+// TestExecuteTests_MkdirAllError exercises the coverage-dir creation error branch.
+func TestExecuteTests_MkdirAllError(t *testing.T) {
+	// Create a file; using it as a path component causes MkdirAll to fail.
+	dir := t.TempDir()
+	blockingFile := filepath.Join(dir, "not-a-dir")
+	if err := os.WriteFile(blockingFile, []byte("block"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	// CoverageDir whose parent is a file — os.MkdirAll cannot traverse it.
+	cfg := config.Config{CoverageDir: filepath.Join(blockingFile, "subdir")}
+	tr := &fakeTestRunner{
+		files: []string{"spec/a_spec.lua"},
+		suite: &domain.SuiteResult{},
+		cov:   &domain.CoverageData{},
+	}
+	_, _, err := executeTests(context.Background(), cfg, tr)
+	if err == nil {
+		t.Fatal("executeTests() expected MkdirAll error, got nil")
 	}
 }
