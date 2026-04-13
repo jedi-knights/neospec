@@ -5,6 +5,7 @@ dist/
 
 # Coverage output (generated)
 coverage/
+*.html
 
 # Go build cache
 *.test
