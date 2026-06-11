@@ -10,9 +10,26 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/jedi-knights/neospec/internal/ports"
 )
+
+// removeAllRetryBackoffs is the sleep schedule between RemoveAll attempts in
+// Close(). A grandchild process spawned by the test (e.g. a git clone started by
+// lazy.nvim) can keep writing into the sandbox tree for a brief window after
+// Neovim exits, making os.RemoveAll race the writer and fail with ENOTEMPTY
+// ("directory not empty"). The runner kills the Neovim process group before
+// Close (see runner.killProcessGroup), so by the time we get here the writer is
+// almost always already gone — these bounded retries only cover the gap between
+// SIGKILL and the kernel reaping in-flight writes. Total budget < 1s.
+var removeAllRetryBackoffs = []time.Duration{
+	20 * time.Millisecond,
+	50 * time.Millisecond,
+	100 * time.Millisecond,
+	200 * time.Millisecond,
+	500 * time.Millisecond,
+}
 
 // fsOps abstracts the OS filesystem operations used by Factory.Create. Holding
 // them in an interface lets tests inject fakes that trigger the MkdirTemp and
@@ -34,6 +51,11 @@ func (realFS) RemoveAll(path string) error                   { return os.RemoveA
 type xdgSandbox struct {
 	root string
 	fs   fsOps
+	// backoffs is the retry schedule used by Close; sleep is the wait function
+	// between attempts. Both are injectable so tests can exercise the retry loop
+	// without real delays.
+	backoffs []time.Duration
+	sleep    func(time.Duration)
 }
 
 // Factory creates XDG sandboxes.
@@ -64,7 +86,7 @@ func (f *Factory) Create(_ context.Context) (ports.Sandbox, error) {
 		}
 	}
 
-	return &xdgSandbox{root: root, fs: f.fs}, nil
+	return &xdgSandbox{root: root, fs: f.fs, backoffs: removeAllRetryBackoffs, sleep: time.Sleep}, nil
 }
 
 // Env returns the environment variables that activate this sandbox.
@@ -87,7 +109,19 @@ func (s *xdgSandbox) Dir() string {
 	return s.root
 }
 
-// Close removes all temporary directories created for this sandbox.
+// Close removes all temporary directories created for this sandbox. It retries
+// RemoveAll with a bounded backoff because a grandchild process may still be
+// writing into the tree just after Neovim exits, which would otherwise fail the
+// first attempt with "directory not empty" (see removeAllRetryBackoffs). The
+// retry is bounded: a genuinely unremovable sandbox still surfaces the error.
 func (s *xdgSandbox) Close() error {
-	return s.fs.RemoveAll(s.root)
+	err := s.fs.RemoveAll(s.root)
+	for _, backoff := range s.backoffs {
+		if err == nil {
+			return nil
+		}
+		s.sleep(backoff)
+		err = s.fs.RemoveAll(s.root)
+	}
+	return err
 }
