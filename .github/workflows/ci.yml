@@ -40,6 +40,11 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+
     steps:
       - uses: actions/checkout@v6
         with:
@@ -60,7 +65,9 @@ jobs:
         run: go build ./...
 
       - name: Test
-        run: go test -race -count=1 -coverprofile=coverage.out ./...
+        run: |
+          set -o pipefail
+          go test -race -count=1 -coverprofile=coverage.out -json ./... | tee test-results.json
 
       - name: Check coverage threshold
         run: |
@@ -70,3 +77,10 @@ jobs:
             echo "::error::Coverage ${COVERAGE}% is below the 80% threshold"
             exit 1
           fi
+
+      - name: Publish test results
+        if: always()
+        uses: jedi-knights/publish-test-results@v0.3.0
+        with:
+          files: test-results.json
+          check-name: Test Results
