@@ -41,7 +41,7 @@ jobs:
 
       - name: Generate Coverage Report
         run: |
-          go install github.com/boumenot/gocover-cobertura@latest
+          go install github.com/boumenot/gocover-cobertura@v1.4.0
           go test -race -count=1 -coverprofile=coverage.out ./...
           gocover-cobertura < coverage.out | grep -v '<!DOCTYPE' > coverage.xml
         shell: bash
