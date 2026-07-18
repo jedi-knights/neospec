@@ -25,6 +25,7 @@ It downloads and caches Neovim binaries automatically — no system install requ
 
 	root.AddCommand(
 		commands.NewRunCmd(),
+		commands.NewExecCmd(),
 		commands.NewVersionCmd(version),
 		commands.NewCacheCmd(),
 	)

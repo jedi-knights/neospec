@@ -280,6 +280,7 @@ neospec [command]
 
 Commands:
   run           Discover and run test files, collect coverage, emit reports
+  exec          Run a command against multiple Neovim versions
   version       Print neospec version and exit
   cache list    List cached Neovim versions and their sizes on disk
   cache clean   Remove all cached Neovim binaries
@@ -293,6 +294,41 @@ Flags (run):
       --threshold float         minimum coverage percentage
       --cache-dir string        directory for cached Neovim binaries
   -v, --verbose                 verbose output
+
+Flags (exec):
+  -c, --config string           path to config file (default "neospec.toml")
+      --versions string         comma-separated Neovim versions (e.g. stable,nightly,v0.10.4)
+      --format string           output format: console, json (default "console")
+      --cache-dir string        directory for cached Neovim binaries
+  -v, --verbose                 verbose output
+```
+
+### `neospec exec` — run a command across a Neovim version matrix
+
+Use `exec` to run an arbitrary command once per Neovim version and aggregate the outcome. Each version's Neovim binary is placed first on `PATH` so `nvim` inside your command resolves to that specific build; the same sandboxed XDG environment `run` uses is applied so plugin invocations cannot read or mutate your real Neovim configuration.
+
+`--` separates neospec's own flags from the wrapped command:
+
+```bash
+# Sanity-check that both stable and nightly launch without errors
+neospec exec --versions=stable,nightly -- nvim --version
+
+# Run a plenary-busted suite against three Neovim versions
+neospec exec --versions=stable,nightly,v0.10.4 -- \
+  nvim --headless -c "PlenaryBustedDirectory tests/" -c "qa!"
+```
+
+The exit code is non-zero if any version fails. JSON output (`--format=json`) makes it straightforward to consume the matrix results in CI without parsing console text:
+
+```json
+{
+  "command": ["nvim", "--version"],
+  "versions": [
+    {"version": "stable", "passed": true, "exit_code": 0, "duration_ms": 320, "stdout": "NVIM v0.10.4\n", "stderr": ""},
+    {"version": "nightly", "passed": true, "exit_code": 0, "duration_ms": 480, "stdout": "NVIM v0.11.0-dev\n", "stderr": ""}
+  ],
+  "summary": {"total": 2, "passed": 2, "failed": 0, "duration_ms": 800}
+}
 ```
 
 ## Neovim version management
