@@ -7,6 +7,16 @@ import (
 	"os/exec"
 )
 
+// RunCommand runs the named executable with the given extra environment
+// entries and arguments, returning stdout, stderr, and any non-zero exit
+// error. It is a bare-function wrapper around the production CommandRunner
+// for callers (like the exec subcommand) that need the same subprocess
+// lifecycle — including process-group reaping of Neovim grandchildren —
+// without pulling in the rest of the test-runner scaffolding.
+func RunCommand(ctx context.Context, env []string, name string, args ...string) ([]byte, []byte, error) {
+	return realCommandRunner{}.Run(ctx, env, name, args...)
+}
+
 // realCommandRunner is the production CommandRunner that delegates to
 // exec.CommandContext. It is the Adapter that wraps the os/exec stdlib API.
 type realCommandRunner struct{}
