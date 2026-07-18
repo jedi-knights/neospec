@@ -33,14 +33,19 @@ Coverage: 73.4% (142/193 lines)
 
 ## Why neospec?
 
-Testing Neovim plugins typically requires either installing Neovim system-wide, vendoring a test framework like [busted](https://lunarmodules.github.io/busted/) or [plenary.nvim](https://github.com/nvim-lua/plenary.nvim), or writing fragile shell scripts that shell out to `nvim --headless`. None of these work cleanly in ephemeral CI environments.
+**Runs your existing plenary.busted tests unchanged.** neospec's harness implements the same `describe` / `it` / `before_each` / `after_each` / `pending` DSL as [plenary.nvim](https://github.com/nvim-lua/plenary.nvim)'s busted harness, and the same `assert.equals` / `assert.is_true` / `assert.has_error` / `assert.matches` shape. Point neospec at your existing `tests/**/*_spec.lua` files and it just works — no rewrites, no migration, no vendored dependencies to keep in sync. See [Porting from plenary.busted](#porting-from-plenarybusted) for the small number of edge-case differences.
 
-neospec is a single binary that:
+**Prefer not to switch runners at all?** `neospec cover` instruments plenary-busted or mini.test directly and gives you coverage reports without touching how the tests run. Your test framework stays. Your coverage story appears. See the [`neospec cover` reference](#neospec-cover--coverage-for-the-test-framework-you-already-use).
+
+Beyond compatibility, neospec is a single binary that solves the CI-plumbing problems every Neovim plugin repo re-solves from scratch:
 
 - **Downloads and caches Neovim automatically** from the official GitHub releases — the right version for your OS and architecture, every time
 - **Isolates every test run** in a clean XDG environment so your tests cannot read or mutate your real Neovim config
 - **Instruments Lua coverage** via `debug.sethook` with no changes to your code
 - **Emits reports** in LCOV, Cobertura XML, JUnit XML, and a color console summary — the formats your CI parser and badge generator already accept
+- **Wraps existing runners** via `neospec cover` — plenary-busted and mini.test users get coverage without swapping test frameworks
+
+The alternative — installing Neovim system-wide, vendoring [busted](https://lunarmodules.github.io/busted/) or plenary, or writing fragile shell scripts around `nvim --headless` — never quite works cleanly in ephemeral CI environments. neospec is what those shell scripts should have been.
 
 ## Installation
 
@@ -169,9 +174,34 @@ describe block exited
 
 `pending` marks a test as skipped without running it. It appears in the console output and in JUnit XML as a skipped test.
 
+## Porting from plenary.busted
+
+Every file that runs under `PlenaryBustedDirectory` runs under `neospec run` with no source changes — the DSL is deliberately API-compatible. A handful of narrow semantic gaps exist where neospec's harness intentionally differs from [luassert](https://github.com/lunarmodules/luassert) (the assertion library plenary.busted vendors); each is called out below with its workaround.
+
+### Assertion differences
+
+| Method | plenary.busted / luassert | neospec |
+|:---|:---|:---|
+| `assert.matches(pattern, str)` | Lua pattern by default; PCRE via `.re` | Lua pattern only |
+| `assert.same(expected, actual)` | Deep-equal via luassert | Not implemented — use `assert.equals` for scalars; walk table structure explicitly for deep comparisons |
+| `assert.truthy(v)` / `assert.falsy(v)` | Loose truthiness (any non-`nil`, non-`false` value passes) | Use `assert.is_true` / `assert.is_false` for strict boolean checks |
+| `assert.spy(fn).was.called()` | Spy/mock via luassert's `spy` module | Not implemented — inject test doubles at construction sites (dependency-injection pattern) |
+| `assert.stub(mod, "fn").returns(v)` | Stub via luassert's `stub` module | Not implemented — same reasoning as spies |
+
+If your suite uses `assert.same` or the spy/stub API extensively, prefer [`neospec cover`](#neospec-cover--coverage-for-the-test-framework-you-already-use) over `neospec run` — cover keeps your existing plenary invocation and just adds coverage instrumentation on top.
+
+### Discovery differences
+
+- plenary.busted matches `*_spec.lua` under any directory you name at the `PlenaryBustedDirectory` call site; neospec defaults to `test/**/*_spec.lua` but accepts arbitrary glob patterns via `--pattern` (repeatable).
+- `PlenaryBustedFile <file>` maps to `neospec run --pattern=<file>`.
+
+### Bootstrapping differences
+
+- plenary.busted requires a `minimal_init.vim` (or `.lua`) that puts plenary on the runtimepath before tests run; neospec's own harness is embedded in the binary so no runtimepath bootstrap is needed for `neospec run`. If you use `neospec cover --runner=plenary-busted`, your existing `minimal_init.vim` is used verbatim via `--minimal-init`.
+
 ## Coverage
 
-Coverage is collected via Lua's `debug.sethook` API. The hook fires on every executed line and records the hit count. No source transformation or annotation is required.
+Coverage is collected via Lua's `debug.sethook` API. The hook fires on every executed line and records the hit count. No source transformation or annotation is required. If you'd rather keep your existing test runner and only add coverage on top, see [`neospec cover`](#neospec-cover--coverage-for-the-test-framework-you-already-use) — it wraps plenary-busted, mini.test, or an arbitrary external command and produces the same LCOV / Cobertura / Coveralls / console reports without changing how your tests run.
 
 ### Reading the console output
 
