@@ -281,6 +281,7 @@ neospec [command]
 Commands:
   run           Discover and run test files, collect coverage, emit reports
   exec          Run a command against multiple Neovim versions
+  cover         Collect coverage while running plenary-busted, mini.test, or an external command
   version       Print neospec version and exit
   cache list    List cached Neovim versions and their sizes on disk
   cache clean   Remove all cached Neovim binaries
@@ -301,7 +302,46 @@ Flags (exec):
       --format string           output format: console, json (default "console")
       --cache-dir string        directory for cached Neovim binaries
   -v, --verbose                 verbose output
+
+Flags (cover):
+  -c, --config string           path to config file (default "neospec.toml")
+      --runner string           wrapped runner: plenary-busted, mini-test, or external
+      --dir string              test directory or glob (required for plenary-busted and mini-test)
+      --minimal-init string     path to init file that bootstraps plenary or mini.test
+      --neovim-version string   neovim version to use
+      --format stringArray      output format(s): console, lcov, cobertura, coveralls (repeatable)
+      --coverage-dir string     directory for coverage report files
+      --threshold float         minimum coverage percentage (0 = disabled)
+      --cache-dir string        directory for cached Neovim binaries
+  -v, --verbose                 verbose output
 ```
+
+### `neospec cover` — coverage for the test framework you already use
+
+`cover` instruments your existing test framework with Lua-level coverage collection **without replacing the runner**. Use it when you're already invested in `plenary.nvim`'s `PlenaryBustedDirectory` or `mini.test` and want coverage reports (LCOV, Cobertura, Coveralls, console) added to your CI without rewriting a single test.
+
+The mechanism is transparent to the wrapped runner: neospec builds a Lua shim that installs the coverage hook, wires a `VimLeavePre` autocmd to serialize the collected data to a file on the way out, and invokes your runner programmatically. Your existing `tests/minimal_init.vim` (or `.lua`) is used verbatim as the runtimepath bootstrap — no changes needed to how your tests load.
+
+```bash
+# plenary-busted — the tj-ecosystem's default
+neospec cover --runner=plenary-busted --dir=tests/ \
+  --minimal-init=tests/minimal_init.vim \
+  --format=console --format=lcov --threshold=80
+
+# mini.test
+neospec cover --runner=mini-test --dir=tests/ \
+  --minimal-init=scripts/minimal_init.lua \
+  --format=lcov
+
+# External mode — your Makefile drives nvim, cover just adds coverage
+neospec cover --runner=external --format=lcov -- make test
+```
+
+For **plenary-busted** and **mini-test** modes, the wrapped runner is invoked from inside the shim; `--dir` is the directory (or glob) the runner scans. Exit code is non-zero if either the runner fails or the collected coverage falls below `--threshold`.
+
+For **external** mode, cover sets `NEOSPEC_COVER_HOOK` and `NEOSPEC_COVER_OUTPUT` env vars and runs your command. Your command is responsible for loading the hook (e.g. `nvim -c "luafile $NEOSPEC_COVER_HOOK" ...`) and ensuring the reporter fires before nvim exits. This is the escape hatch for CI setups that already have a `make test` target you don't want to reshape around neospec's opinion.
+
+Cover mode intentionally does not support `--format=junit` — cover has no test-suite data to serialize into JUnit's schema. If you need JUnit output alongside coverage, use `neospec run` on a neospec-native test file, or emit JUnit from your existing runner's own reporter.
 
 ### `neospec exec` — run a command across a Neovim version matrix
 

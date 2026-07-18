@@ -24,6 +24,23 @@ func luaEscape(s string) string {
 //go:embed lua/*.lua
 var luaFS embed.FS
 
+// CoverageHookSource returns the embedded Lua source of the coverage hook,
+// exposed so companion adapters (like the exec-matrix / coverage-only wrapper)
+// can build their own shim without duplicating the hook. The returned bytes
+// are safe to embed directly into a Lua string context; no further
+// escaping is needed.
+func CoverageHookSource() ([]byte, error) {
+	return luaFS.ReadFile("lua/coverage_hook.lua")
+}
+
+// ReporterSource returns the embedded Lua source of the JSON reporter. It
+// reads the _neospec_results and _neospec_coverage globals and writes a
+// single JSON document to stdout via io.write; callers that need the output
+// on a channel other than stdout should intercept io.write themselves.
+func ReporterSource() ([]byte, error) {
+	return luaFS.ReadFile("lua/reporter.lua")
+}
+
 // buildShim constructs the Lua entry-point that is written into the sandbox
 // before each Neovim invocation. It concatenates the coverage hook and the
 // test harness, then appends the dofile() call for the actual test file.
