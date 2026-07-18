@@ -238,6 +238,14 @@ func (r *Runner) runOne(ctx context.Context, testFile string) (suite *domain.Sui
 	return
 }
 
+// ParseReporterOutput decodes the JSON emitted by the Lua reporter into
+// domain types. It is the public interface companion adapters (like the
+// coverage-only wrapper around plenary-busted or mini.test) use to consume
+// the reporter's output after intercepting it from stdout or a file.
+func ParseReporterOutput(data []byte) (*domain.SuiteResult, *domain.CoverageData, error) {
+	return parseOutput(data)
+}
+
 // parseOutput decodes the JSON emitted by the Lua harness.
 func parseOutput(data []byte) (*domain.SuiteResult, *domain.CoverageData, error) {
 	var out runOutput
