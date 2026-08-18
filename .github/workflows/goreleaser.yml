@@ -2,8 +2,9 @@ name: GoReleaser
 
 # Triggered by the v* tag that go-semantic-release pushes during the
 # release workflow. GoReleaser reads the version from the tag, cross-compiles
-# for all supported platforms, packages the archives, and creates the GitHub
-# release with all assets attached.
+# for all supported platforms, packages the archives, creates the GitHub
+# release with all assets attached, and pushes the Homebrew formula to
+# jedi-knights/homebrew-tap.
 
 on:
   push:
@@ -39,3 +40,4 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}

@@ -47,6 +47,24 @@ checksum:
   name_template: checksums.txt
   algorithm: sha256
 
+brews:
+  - name: neospec
+    directory: Formula
+    repository:
+      owner: jedi-knights
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    commit_author:
+      name: goreleaser-bot
+      email: goreleaser-bot@users.noreply.github.com
+    homepage: "https://github.com/jedi-knights/neospec"
+    description: "A self-contained test runner and coverage tool for Neovim plugins and distributions."
+    license: "MIT"
+    install: |
+      bin.install "neospec"
+    test: |
+      system "#{bin}/neospec", "version"
+
 # Changelog is managed by go-semantic-release (CHANGELOG.md).
 # GoReleaser's built-in changelog is disabled to avoid duplication.
 changelog:
