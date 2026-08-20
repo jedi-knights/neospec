@@ -138,6 +138,13 @@ function _neospec_report()
 	-- with no output. On failure, emit a minimal error JSON so the consumer
 	-- sees a structured diagnostic rather than an "unexpected EOF".
 	local ok, err = pcall(function()
+		-- Fill in zero counts for executable-but-unexecuted lines before
+		-- serialising. Wrapped in pcall: a failure here must degrade to
+		-- hits-only coverage, never cost us the whole report.
+		if type(_neospec_coverage_finalize) == "function" then
+			pcall(_neospec_coverage_finalize)
+		end
+
 		-- Build the coverage array from _neospec_coverage.
 		-- Skip entries with no line data: an empty Lua table encodes as "[]" (a JSON
 		-- array) rather than "{}" (a JSON object), which would confuse consumers that
