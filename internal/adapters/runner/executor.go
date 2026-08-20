@@ -249,8 +249,15 @@ func (cl *coverageLines) UnmarshalJSON(data []byte) error {
 }
 
 type coverageJSON struct {
-	Path  string        `json:"path"`
-	Lines coverageLines `json:"lines"`
+	Path      string         `json:"path"`
+	Lines     coverageLines  `json:"lines"`
+	Functions []functionJSON `json:"functions,omitempty"`
+}
+
+type functionJSON struct {
+	Name  string `json:"name"`
+	Line  int    `json:"line"`
+	Count int    `json:"count"`
 }
 
 // runOne executes a single test file in a fresh sandbox.
@@ -330,6 +337,13 @@ func parseOutput(data []byte) (*domain.SuiteResult, *domain.CoverageData, error)
 		fileCov := &domain.FileCoverage{
 			Path:  fc.Path,
 			Lines: make(map[int]int, len(fc.Lines)),
+		}
+		for _, fn := range fc.Functions {
+			fileCov.Functions = append(fileCov.Functions, domain.FunctionCoverage{
+				Name:  fn.Name,
+				Line:  fn.Line,
+				Count: fn.Count,
+			})
 		}
 		for lineStr, count := range fc.Lines {
 			lineNo, err := strconv.Atoi(lineStr)
