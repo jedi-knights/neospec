@@ -43,6 +43,7 @@ type runFlags struct {
 	verbose         bool
 	initFile        string
 	coverageInclude []string
+	coverageSource  []string
 }
 
 // NewRunCmd builds the `neospec run` (and default) command.
@@ -69,6 +70,7 @@ func NewRunCmd() *cobra.Command {
 	f.BoolVarP(&flags.verbose, "verbose", "v", false, "verbose output")
 	f.StringVar(&flags.initFile, "init-file", "", "path to a Lua file executed before the coverage hook (e.g. tests/minimal_init.lua)")
 	f.StringArrayVar(&flags.coverageInclude, "coverage-include", nil, "restrict coverage to files whose path contains this substring (repeatable; e.g. lua/)")
+	f.StringArrayVar(&flags.coverageSource, "coverage-source", nil, "glob of source files to report even if no test loads them (repeatable; e.g. 'lua/**/*.lua')")
 
 	return cmd
 }
@@ -104,7 +106,8 @@ func runTests(ctx context.Context, flags *runFlags, deps runDeps) error {
 		if deps.runnerFactory != nil {
 			tr = deps.runnerFactory(nvimPath, cfg.Verbose, cfg.InitFile, cfg.CoverageInclude)
 		} else {
-			tr = runner.NewWithDefaultSandbox(nvimPath, cfg.Verbose, cfg.InitFile, cfg.CoverageInclude)
+			tr = runner.NewWithDefaultSandbox(nvimPath, cfg.Verbose, cfg.InitFile, cfg.CoverageInclude).
+				WithCoverageSources(cfg.CoverageSource)
 		}
 	}
 	suite, cov, err := executeTests(ctx, cfg, tr)
@@ -286,5 +289,8 @@ func applyFlags(cfg *config.Config, flags *runFlags) {
 	}
 	if len(flags.coverageInclude) > 0 {
 		cfg.CoverageInclude = flags.coverageInclude
+	}
+	if len(flags.coverageSource) > 0 {
+		cfg.CoverageSource = flags.coverageSource
 	}
 }

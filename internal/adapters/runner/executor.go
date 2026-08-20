@@ -26,6 +26,10 @@ type Runner struct {
 	verbose         bool
 	initFile        string
 	coverageInclude []string
+	coverageSources []string
+	// resolvedSources is populated once per Run from coverageSources so the
+	// glob walk does not repeat for every test file.
+	resolvedSources []string
 }
 
 // New creates a Runner.
@@ -56,6 +60,21 @@ func NewWithDefaultSandbox(nvimPath string, verbose bool, initFile string, cover
 	return New(nvimPath, sandbox.NewFactory(), realCommandRunner{}, verbose, initFile, coverageInclude)
 }
 
+// WithCoverageSources sets glob patterns for source files that should appear
+// in the coverage report even when no test loads them.
+//
+// Supplied as a method rather than a seventh constructor parameter: New is
+// already at six and every call site would have to change to opt out of a
+// feature most callers do not use.
+//
+// Patterns use the same syntax as test discovery (including "**"), because
+// coverage_include is a substring filter and cannot be walked to find files.
+// Returns the receiver for chaining.
+func (r *Runner) WithCoverageSources(patterns []string) *Runner {
+	r.coverageSources = patterns
+	return r
+}
+
 // Discover satisfies the discovery half of ports.TestRunner.
 func (r *Runner) Discover(ctx context.Context, patterns []string) ([]string, error) {
 	return Discover(ctx, patterns)
@@ -76,6 +95,24 @@ func (r *Runner) Run(ctx context.Context, files []string) (*domain.SuiteResult, 
 		cov     *domain.CoverageData
 		err     error
 		skipped bool // true when the worker skipped this index due to context cancellation
+	}
+
+	// Resolve coverage source globs once, before any worker starts, so the
+	// walk happens a single time and the workers see a stable slice.
+	// A resolution failure must not fail the run: coverage is a report, not a
+	// gate, so degrade to hook-observed files only.
+	r.resolvedSources = nil
+	if len(r.coverageSources) > 0 {
+		found, err := Discover(ctx, r.coverageSources)
+		if err == nil {
+			abs := make([]string, 0, len(found))
+			for _, f := range found {
+				if a, aerr := filepath.Abs(f); aerr == nil {
+					abs = append(abs, a)
+				}
+			}
+			r.resolvedSources = abs
+		}
 	}
 
 	// Feed file indices to workers via a buffered jobs channel.
@@ -149,6 +186,12 @@ func (r *Runner) Run(ctx context.Context, files []string) (*domain.SuiteResult, 
 	}
 	suite.Duration = time.Since(start)
 
+	// Each subprocess reports coverage for every file it touched, so the same
+	// path arrives once per test file. Merge before returning; otherwise both
+	// totals and hits are multiplied by however many subprocesses happened to
+	// load each file, and the resulting percentage is meaningless.
+	cov.Normalize()
+
 	// Propagate context cancellation so callers can distinguish "the run was
 	// aborted" from "all test files failed normally".
 	if err := ctx.Err(); err != nil {
@@ -216,7 +259,7 @@ func (r *Runner) runOne(ctx context.Context, testFile string) (suite *domain.Sui
 
 	// Write the combined harness+hook Lua shim into the sandbox.
 	shimPath := filepath.Join(sb.Dir(), "neospec_run.lua")
-	shim, err := buildShim(testFile, r.initFile, r.coverageInclude)
+	shim, err := buildShim(testFile, r.initFile, r.coverageInclude, r.resolvedSources)
 	if err != nil {
 		return nil, nil, fmt.Errorf("building shim: %w", err)
 	}

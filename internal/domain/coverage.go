@@ -1,5 +1,7 @@
 package domain
 
+import "path/filepath"
+
 // FileCoverage holds line-level execution counts for one source file.
 // Lines is a map from 1-based line number to the number of times that line
 // was executed during the test run.
@@ -68,6 +70,65 @@ func (c *CoverageData) Percentage() float64 {
 		return 0
 	}
 	return float64(c.HitLines()) / float64(total) * 100
+}
+
+// Normalize merges duplicate entries so each path appears exactly once.
+//
+// Duplicates are the normal case, not an edge case: every test file runs in
+// its own Neovim subprocess, and each reports coverage for every source file
+// it touched. Without merging, TotalLines and HitLines both sum across the
+// duplicates, and they do not scale together — subprocess A may hit lines
+// {1,2} of a file while B hits {1,3}, yielding 4 "hit lines" for a file that
+// only has 3. The reported percentage is wrong in both directions depending on
+// how execution happened to distribute.
+//
+// Line counts are summed, which also gives the right answer for the
+// executable-but-unexecuted lines recorded as zero: 0 + 5 is 5, so a zero from
+// one subprocess can never mask a hit from another.
+//
+// Order is preserved by first appearance so output stays deterministic.
+// Idempotent — after the first call there are no duplicates left to merge.
+func (c *CoverageData) Normalize() {
+	if len(c.Files) < 2 {
+		return
+	}
+
+	merged := make(map[string]*FileCoverage, len(c.Files))
+	order := make([]string, 0, len(c.Files))
+
+	for _, f := range c.Files {
+		if f == nil {
+			continue
+		}
+		// Key by the cleaned path. The same file is spelled differently
+		// depending on how it entered the report: the line hook records
+		// whatever debug.getinfo saw (which may carry a doubled slash from a
+		// package.path built by concatenation), while discovered source files
+		// arrive already absolute and clean. Without this, one file becomes two
+		// entries and its lines are counted twice.
+		key := filepath.Clean(f.Path)
+		existing, ok := merged[key]
+		if !ok {
+			// Copy rather than alias: callers may still hold the original slice,
+			// and mutating their maps in place would be a surprising side effect.
+			lines := make(map[int]int, len(f.Lines))
+			for line, hits := range f.Lines {
+				lines[line] = hits
+			}
+			merged[key] = &FileCoverage{Path: key, Lines: lines}
+			order = append(order, key)
+			continue
+		}
+		for line, hits := range f.Lines {
+			existing.Lines[line] += hits
+		}
+	}
+
+	files := make([]*FileCoverage, 0, len(order))
+	for _, path := range order {
+		files = append(files, merged[path])
+	}
+	c.Files = files
 }
 
 // FileByPath returns the FileCoverage for a given path, or nil.
