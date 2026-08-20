@@ -60,6 +60,30 @@ func NewWithDefaultSandbox(nvimPath string, verbose bool, initFile string, cover
 	return New(nvimPath, sandbox.NewFactory(), realCommandRunner{}, verbose, initFile, coverageInclude)
 }
 
+// resolveCoverageSources expands the configured globs to absolute paths.
+//
+// A resolution failure must not fail the run: coverage is a report, not a
+// gate, so a bad glob degrades to hook-observed files only rather than
+// aborting a suite that otherwise passed.
+func (r *Runner) resolveCoverageSources(ctx context.Context) []string {
+	if len(r.coverageSources) == 0 {
+		return nil
+	}
+	found, err := Discover(ctx, r.coverageSources)
+	if err != nil {
+		return nil
+	}
+	abs := make([]string, 0, len(found))
+	for _, f := range found {
+		a, aerr := filepath.Abs(f)
+		if aerr != nil {
+			continue
+		}
+		abs = append(abs, a)
+	}
+	return abs
+}
+
 // WithCoverageSources sets glob patterns for source files that should appear
 // in the coverage report even when no test loads them.
 //
@@ -99,21 +123,7 @@ func (r *Runner) Run(ctx context.Context, files []string) (*domain.SuiteResult, 
 
 	// Resolve coverage source globs once, before any worker starts, so the
 	// walk happens a single time and the workers see a stable slice.
-	// A resolution failure must not fail the run: coverage is a report, not a
-	// gate, so degrade to hook-observed files only.
-	r.resolvedSources = nil
-	if len(r.coverageSources) > 0 {
-		found, err := Discover(ctx, r.coverageSources)
-		if err == nil {
-			abs := make([]string, 0, len(found))
-			for _, f := range found {
-				if a, aerr := filepath.Abs(f); aerr == nil {
-					abs = append(abs, a)
-				}
-			}
-			r.resolvedSources = abs
-		}
-	}
+	r.resolvedSources = r.resolveCoverageSources(ctx)
 
 	// Feed file indices to workers via a buffered jobs channel.
 	jobs := make(chan int, n)
