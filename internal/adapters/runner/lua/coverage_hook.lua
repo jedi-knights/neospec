@@ -155,6 +155,59 @@ local function collect_proto_lines(proto, acc, depth, util)
 	return acc
 end
 
+--- Record files that no test ever loaded.
+---
+--- The line hook only ever sees a file that was required, so a module no test
+--- touches is absent from the report entirely rather than present at 0%. That
+--- silently flatters the total: the least-tested code in a project is exactly
+--- the code most likely never to be loaded.
+---
+--- paths is a resolved list supplied by the caller. Discovery stays on the Go
+--- side, which already globs test files and knows the project root -- the
+--- include patterns here are substrings and cannot be walked.
+--- @param paths string[] absolute paths to source files
+--- @param util table jit.util
+local function add_never_loaded(paths, util)
+	-- Compare canonical paths, not raw strings. The hook keys entries by
+	-- whatever debug.getinfo reported, which depends on how the module was
+	-- required; the caller supplies absolute paths. Adding a file that is
+	-- already covered under a different spelling would count its lines twice
+	-- and depress the percentage.
+	local seen = {}
+	local function canonical(p)
+		if vim and vim.uv and vim.uv.fs_realpath then
+			local real = vim.uv.fs_realpath(p)
+			if real then
+				return real
+			end
+		end
+		return p
+	end
+	for path in pairs(_neospec_coverage) do
+		seen[canonical(path)] = true
+	end
+
+	for _, path in ipairs(paths) do
+		if type(path) == "string" and #path > 0 and not seen[canonical(path)] then
+			local chunk = loadfile(path)
+			if chunk then
+				local executable = collect_proto_lines(chunk, {}, 0, util)
+				-- Only create an entry when the file has executable lines. A file
+				-- of pure comments would otherwise appear as 0/0, which renders
+				-- as 0% in some reporters and misrepresents it as untested.
+				local entry, any = {}, false
+				for line in pairs(executable) do
+					entry[line] = 0
+					any = true
+				end
+				if any then
+					_neospec_coverage[path] = entry
+				end
+			end
+		end
+	end
+end
+
 --- Fill in zero counts for executable lines that were never executed.
 ---
 --- Only touches files already present in _neospec_coverage -- a file no test
@@ -190,6 +243,12 @@ function _neospec_coverage_finalize()
 				end
 			end
 		end
+	end
+
+	-- Files no test loaded are invisible to the hook; add them from the
+	-- caller-supplied list so they count against the total.
+	if type(_neospec_coverage_sources) == "table" then
+		add_never_loaded(_neospec_coverage_sources, util)
 	end
 end
 

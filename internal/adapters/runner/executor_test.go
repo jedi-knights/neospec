@@ -352,8 +352,18 @@ func TestRunner_Run_MultipleFiles(t *testing.T) {
 	if len(suite.Tests) != 3 {
 		t.Errorf("expected 3 tests (one per file), got %d", len(suite.Tests))
 	}
-	if len(cov.Files) != 3 {
-		t.Errorf("expected 3 coverage files (one per file), got %d", len(cov.Files))
+	// All three subprocesses report coverage for the same path, so Run merges
+	// them into a single entry. Asserting three entries here would be pinning
+	// the double-counting bug that made TotalLines scale with the number of
+	// test files rather than the size of the source.
+	if len(cov.Files) != 1 {
+		t.Errorf("expected 1 merged coverage file, got %d", len(cov.Files))
+	}
+	if got := cov.Files[0].Lines[1]; got != 6 {
+		t.Errorf("line 1 = %d hits, want 6 (2 hits x 3 subprocesses, summed)", got)
+	}
+	if cov.TotalLines() != 1 {
+		t.Errorf("TotalLines = %d, want 1 (one distinct line across the merge)", cov.TotalLines())
 	}
 }
 

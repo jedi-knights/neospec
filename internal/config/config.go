@@ -44,6 +44,15 @@ type Config struct {
 	// source tree and exclude Neovim's internal runtime files.
 	// Example: coverage_include = ["lua/", "plugin/"]
 	CoverageInclude []string `toml:"coverage_include"`
+
+	// CoverageSource is an optional list of glob patterns (same syntax as
+	// Patterns, including "**") naming source files that should appear in the
+	// coverage report even when no test loads them. Without it, a module no
+	// test requires is invisible to the line hook and silently excluded from
+	// the total, flattering the percentage.
+	//
+	// Example: coverage_source = ["lua/**/*.lua"]
+	CoverageSource []string `toml:"coverage_source"`
 }
 
 // defaults returns a Config populated with built-in default values.
@@ -136,6 +145,9 @@ func applyEnv(cfg *Config) error {
 	}
 	if v := strings.TrimSpace(os.Getenv("NEOSPEC_COVERAGE_INCLUDE")); v != "" {
 		cfg.CoverageInclude = splitTrimmed(v, ",")
+	}
+	if v := os.Getenv("NEOSPEC_COVERAGE_SOURCE"); v != "" {
+		cfg.CoverageSource = splitTrimmed(v, ",")
 	}
 	return nil
 }
