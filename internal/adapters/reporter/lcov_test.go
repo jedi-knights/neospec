@@ -213,3 +213,78 @@ func TestConsole_Write_Color(t *testing.T) {
 		t.Errorf("expected ANSI codes with color=true:\n%s", got)
 	}
 }
+
+// Function records must appear before line records and FNDA must key to the
+// same names as FN, or viewers silently drop the function column.
+func TestLCOV_WritesFunctionRecords(t *testing.T) {
+	cov := &domain.CoverageData{Files: []*domain.FileCoverage{{
+		Path:  "lua/mod.lua",
+		Lines: map[int]int{2: 1, 6: 0},
+		Functions: []domain.FunctionCoverage{
+			{Name: "M.called", Line: 1, Count: 3},
+			{Name: "M.never", Line: 5, Count: 0},
+		},
+	}}}
+
+	var buf bytes.Buffer
+	if err := (&reporter.LCOV{}).Write(context.Background(), &buf, nil, cov); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	out := buf.String()
+
+	for _, want := range []string{
+		"FN:1,M.called", "FN:5,M.never",
+		"FNDA:3,M.called", "FNDA:0,M.never",
+		"FNF:2", "FNH:1",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	if fn, da := strings.Index(out, "FN:1"), strings.Index(out, "DA:"); fn > da {
+		t.Errorf("FN records must precede DA records; got FN at %d, DA at %d", fn, da)
+	}
+}
+
+// Two functions sharing a recovered name would make FNDA ambiguous — a viewer
+// attributes both counts to whichever record it read last.
+func TestLCOV_DisambiguatesDuplicateFunctionNames(t *testing.T) {
+	cov := &domain.CoverageData{Files: []*domain.FileCoverage{{
+		Path:  "lua/mod.lua",
+		Lines: map[int]int{1: 1},
+		Functions: []domain.FunctionCoverage{
+			{Name: "helper", Line: 3, Count: 1},
+			{Name: "helper", Line: 9, Count: 0},
+		},
+	}}}
+
+	var buf bytes.Buffer
+	if err := (&reporter.LCOV{}).Write(context.Background(), &buf, nil, cov); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	out := buf.String()
+
+	if !strings.Contains(out, "FN:3,helper") || !strings.Contains(out, "FN:9,helper@9") {
+		t.Errorf("duplicate names not disambiguated:\n%s", out)
+	}
+	if strings.Count(out, "FNDA:") != 2 {
+		t.Errorf("want 2 FNDA records, got:\n%s", out)
+	}
+}
+
+// A file with no functions must emit no function block at all: FNF:0 renders
+// as a 0%-functions row, which reads as a gap rather than "not applicable".
+func TestLCOV_OmitsFunctionBlockWhenNoFunctions(t *testing.T) {
+	cov := &domain.CoverageData{Files: []*domain.FileCoverage{{
+		Path:  "lua/data.lua",
+		Lines: map[int]int{1: 1},
+	}}}
+
+	var buf bytes.Buffer
+	if err := (&reporter.LCOV{}).Write(context.Background(), &buf, nil, cov); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if out := buf.String(); strings.Contains(out, "FNF:") || strings.Contains(out, "FN:") {
+		t.Errorf("expected no function records, got:\n%s", out)
+	}
+}

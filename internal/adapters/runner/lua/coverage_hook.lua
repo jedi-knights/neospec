@@ -155,6 +155,158 @@ local function collect_proto_lines(proto, acc, depth, util)
 	return acc
 end
 
+-- ---------------------------------------------------------------------------
+-- Function discovery
+-- ---------------------------------------------------------------------------
+--
+-- lcov carries FN/FNDA/FNF/FNH records alongside line data; without them the
+-- function column of any lcov viewer reads empty. Each Lua prototype IS a
+-- function, so the same walk that yields executable lines also enumerates
+-- every function including nested closures.
+--
+-- Two things the runtime does not give us:
+--
+--   Names. A prototype does not store one -- in Lua a function's name comes
+--   from the enclosing assignment, and debug.getinfo only recovers it for a
+--   live call frame. We read the source line at linedefined and match the
+--   common definition forms. Anonymous callbacks fall back to a positional
+--   label, which is honest rather than wrong.
+--
+--   Call counts. The hook records line hits, not invocations. We use the hit
+--   count of the function's first body line, which equals the call count for
+--   any function whose first statement is unconditional -- nearly all of them.
+--   The accurate alternative is a "c" (call) debug hook, which would fire on
+--   every call in the suite including Neovim's own internals; that overhead is
+--   not worth the precision for a coverage report.
+
+_neospec_functions = _neospec_functions or {}
+
+--- Read a source file into a line-indexed table, or nil if unreadable.
+local function read_source_lines(path)
+	local fh = io.open(path, "r")
+	if not fh then
+		return nil
+	end
+	local lines = {}
+	for line in fh:lines() do
+		lines[#lines + 1] = line
+	end
+	fh:close()
+	return lines
+end
+
+-- Ordered most specific first; the first match wins.
+local NAME_PATTERNS = {
+	"local%s+function%s+([%w_]+)%s*%(", -- local function foo(
+	"function%s+([%w_%.:]+)%s*%(", -- function M.foo( / function M:foo(
+	"local%s+([%w_]+)%s*=%s*function", -- local foo = function
+	"([%w_%.:]+)%s*=%s*function%s*%(", -- M.foo = function(
+	"%[[\"']([^\"']+)[\"']%]%s*=%s*function", -- t["foo"] = function
+	"([%w_]+)%s*=%s*function", -- foo = function
+}
+
+--- Best-effort function name from the source line where it is defined.
+--- @param src string|nil the source line
+--- @param lineno integer 1-based definition line
+--- @return string
+local function function_name(src, lineno)
+	if type(src) == "string" then
+		for _, pattern in ipairs(NAME_PATTERNS) do
+			local name = src:match(pattern)
+			if name then
+				return name
+			end
+		end
+	end
+	-- No recognisable definition form: an anonymous callback, a method in a
+	-- table literal, or a multi-line signature. Label it by position rather
+	-- than guessing.
+	return "anonymous@" .. tostring(lineno)
+end
+
+--- Walk a prototype tree collecting one record per function.
+--- Each record carries the definition line and that prototype's OWN executable
+--- lines -- child prototypes contribute their own records, so a parent's set
+--- excludes its nested closures.
+local function collect_protos(proto, out, depth, util)
+	if depth > MAX_PROTO_DEPTH then
+		return out
+	end
+
+	local own = {}
+	local pc = 0
+	while true do
+		local ok, bc = pcall(util.funcbc, proto, pc)
+		if not ok or bc == nil then
+			break
+		end
+		local ok_info, info = pcall(util.funcinfo, proto, pc)
+		if ok_info and info and info.currentline and info.currentline > 0 then
+			own[info.currentline] = true
+		end
+		pc = pc + 1
+	end
+
+	local ok_fi, fi = pcall(util.funcinfo, proto)
+	-- linedefined == 0 is the file's main chunk, not a function. lcov reports
+	-- functions; including the chunk would inflate FNF on every file.
+	if ok_fi and fi and fi.linedefined and fi.linedefined > 0 then
+		out[#out + 1] = { line = fi.linedefined, own = own }
+	end
+
+	local i = -1
+	while true do
+		local ok, k = pcall(util.funck, proto, i)
+		if not ok or k == nil then
+			break
+		end
+		if type(k) == "proto" then
+			collect_protos(k, out, depth + 1, util)
+		end
+		i = i - 1
+	end
+
+	return out
+end
+
+--- Build the function records for one file.
+--- @param path string
+--- @param chunk function compiled chunk for path
+--- @param hits table<integer, integer> line -> count for this file
+--- @param util table jit.util
+local function record_functions(path, chunk, hits, util)
+	local protos = collect_protos(chunk, {}, 0, util)
+	if #protos == 0 then
+		return
+	end
+
+	local src = read_source_lines(path)
+	local records = {}
+	for _, proto in ipairs(protos) do
+		-- The definition line executes when the closure is CREATED, not when it
+		-- is called, so counting it would report every function as covered.
+		-- Use the first body line strictly after it instead.
+		local first_body
+		for line in pairs(proto.own) do
+			if line > proto.line and (first_body == nil or line < first_body) then
+				first_body = line
+			end
+		end
+
+		local count = 0
+		if first_body and hits[first_body] then
+			count = hits[first_body]
+		end
+
+		records[#records + 1] = {
+			name = function_name(src and src[proto.line] or nil, proto.line),
+			line = proto.line,
+			count = count,
+		}
+	end
+	_neospec_functions[path] = records
+end
+
 --- Record files that no test ever loaded.
 ---
 --- The line hook only ever sees a file that was required, so a module no test
@@ -202,6 +354,7 @@ local function add_never_loaded(paths, util)
 				end
 				if any then
 					_neospec_coverage[path] = entry
+					record_functions(path, chunk, entry, util)
 				end
 			end
 		end
@@ -241,6 +394,9 @@ function _neospec_coverage_finalize()
 						lines[line] = 0
 					end
 				end
+				-- Functions are derived after the zero-fill so a function whose
+				-- body never ran still resolves a count (0) rather than nil.
+				record_functions(path, chunk, lines, util)
 			end
 		end
 	end

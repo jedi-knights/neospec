@@ -27,6 +27,8 @@ func (l *LCOV) Write(_ context.Context, w io.Writer, _ *domain.SuiteResult, cov 
 		fmt.Fprintln(w, "TN:")
 		fmt.Fprintf(w, "SF:%s\n", file.Path)
 
+		writeFunctions(w, file)
+
 		// Collect and sort line numbers for deterministic output.
 		lines := make([]int, 0, len(file.Lines))
 		for ln := range file.Lines {
@@ -44,4 +46,51 @@ func (l *LCOV) Write(_ context.Context, w io.Writer, _ *domain.SuiteResult, cov 
 	}
 
 	return nil
+}
+
+// writeFunctions emits the FN/FNDA/FNF/FNH block for one file.
+//
+// lcov requires function records before line records, and keys FNDA to the
+// FN name rather than the line. Names recovered from Lua source are not
+// guaranteed unique within a file -- two local helpers can share a name, and
+// several anonymous callbacks on one line would collide -- so duplicates are
+// suffixed with their definition line. Without that, a viewer attributes every
+// duplicate's hits to whichever record it saw last.
+//
+// Files with no functions emit nothing: FNF:0/FNH:0 is legal but makes every
+// data-only file render as a 0%-functions row, which reads as a gap rather
+// than as "not applicable".
+func writeFunctions(w io.Writer, file *domain.FileCoverage) {
+	if len(file.Functions) == 0 {
+		return
+	}
+
+	fns := make([]domain.FunctionCoverage, len(file.Functions))
+	copy(fns, file.Functions)
+	sort.Slice(fns, func(i, j int) bool {
+		if fns[i].Line != fns[j].Line {
+			return fns[i].Line < fns[j].Line
+		}
+		return fns[i].Name < fns[j].Name
+	})
+
+	seen := make(map[string]int, len(fns))
+	names := make([]string, len(fns))
+	for i, fn := range fns {
+		name := fn.Name
+		if seen[name] > 0 {
+			name = fmt.Sprintf("%s@%d", fn.Name, fn.Line)
+		}
+		seen[fn.Name]++
+		names[i] = name
+	}
+
+	for i, fn := range fns {
+		fmt.Fprintf(w, "FN:%d,%s\n", fn.Line, names[i])
+	}
+	for i, fn := range fns {
+		fmt.Fprintf(w, "FNDA:%d,%s\n", fn.Count, names[i])
+	}
+	fmt.Fprintf(w, "FNF:%d\n", file.TotalFunctions())
+	fmt.Fprintf(w, "FNH:%d\n", file.HitFunctions())
 }

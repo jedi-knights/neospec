@@ -152,7 +152,16 @@ function _neospec_report()
 		local coverage = {}
 		for path, lines in pairs(_neospec_coverage or {}) do
 			if next(lines) ~= nil then
-				table.insert(coverage, { path = path, lines = lines })
+				local entry = { path = path, lines = lines }
+				-- Function records are optional: a file with no functions (pure
+				-- data or config) simply omits the key rather than encoding an
+				-- empty Lua table, which would serialise as "[]" and read as an
+				-- array where a map is expected elsewhere.
+				local fns = (_neospec_functions or {})[path]
+				if fns and #fns > 0 then
+					entry.functions = fns
+				end
+				table.insert(coverage, entry)
 			end
 		end
 

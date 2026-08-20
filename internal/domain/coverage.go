@@ -2,6 +2,21 @@ package domain
 
 import "path/filepath"
 
+// FunctionCoverage describes one function definition in a source file.
+//
+// Name is best-effort: Lua prototypes carry no name, so it is recovered from
+// the source line at Line and may be a positional label like "anonymous@42"
+// for callbacks and multi-line signatures.
+//
+// Count is the execution count of the function's first body line, which
+// equals the call count for any function whose first statement is
+// unconditional.
+type FunctionCoverage struct {
+	Name  string
+	Line  int
+	Count int
+}
+
 // FileCoverage holds line-level execution counts for one source file.
 // Lines is a map from 1-based line number to the number of times that line
 // was executed during the test run.
@@ -11,6 +26,25 @@ type FileCoverage struct {
 	Path string
 	// Lines maps 1-based line numbers to execution counts.
 	Lines map[int]int
+	// Functions lists the functions defined in this file. May be empty for
+	// files that define none.
+	Functions []FunctionCoverage
+}
+
+// HitFunctions returns the number of functions executed at least once.
+func (f *FileCoverage) HitFunctions() int {
+	count := 0
+	for _, fn := range f.Functions {
+		if fn.Count > 0 {
+			count++
+		}
+	}
+	return count
+}
+
+// TotalFunctions returns the number of functions defined in this file.
+func (f *FileCoverage) TotalFunctions() int {
+	return len(f.Functions)
 }
 
 // HitLines returns the number of lines executed at least once.
@@ -115,13 +149,19 @@ func (c *CoverageData) Normalize() {
 			for line, hits := range f.Lines {
 				lines[line] = hits
 			}
-			merged[key] = &FileCoverage{Path: key, Lines: lines}
+			fns := make([]FunctionCoverage, len(f.Functions))
+			copy(fns, f.Functions)
+			merged[key] = &FileCoverage{Path: key, Lines: lines, Functions: fns}
 			order = append(order, key)
 			continue
 		}
 		for line, hits := range f.Lines {
 			existing.Lines[line] += hits
 		}
+		// Functions are keyed by definition line: the same file analysed in two
+		// subprocesses yields the same definitions, so merge counts rather than
+		// appending duplicate records.
+		mergeFunctions(existing, f.Functions)
 	}
 
 	files := make([]*FileCoverage, 0, len(order))
@@ -139,4 +179,24 @@ func (c *CoverageData) FileByPath(path string) *FileCoverage {
 		}
 	}
 	return nil
+}
+
+// mergeFunctions folds src into dst.Functions, summing counts for functions
+// already present (matched on definition line) and appending the rest.
+func mergeFunctions(dst *FileCoverage, src []FunctionCoverage) {
+	if len(src) == 0 {
+		return
+	}
+	index := make(map[int]int, len(dst.Functions))
+	for i, fn := range dst.Functions {
+		index[fn.Line] = i
+	}
+	for _, fn := range src {
+		if i, ok := index[fn.Line]; ok {
+			dst.Functions[i].Count += fn.Count
+			continue
+		}
+		index[fn.Line] = len(dst.Functions)
+		dst.Functions = append(dst.Functions, fn)
+	}
 }
