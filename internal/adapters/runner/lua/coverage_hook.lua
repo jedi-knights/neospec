@@ -100,6 +100,99 @@ local function hook(event)
 	_neospec_coverage[path][line] = (_neospec_coverage[path][line] or 0) + 1
 end
 
+-- ---------------------------------------------------------------------------
+-- Executable-line discovery
+-- ---------------------------------------------------------------------------
+--
+-- The line hook above can only record lines that RAN. Without a second source
+-- of truth for which lines COULD have run, every recorded line has at least
+-- one hit and coverage is 100% by construction -- the metric cannot detect
+-- untested code, which is the only thing it exists to do.
+--
+-- debug.getinfo(fn, "L").activelines is the obvious candidate but only covers
+-- the top-level chunk: a function body is a separate prototype whose lines are
+-- absent. Instead we walk the prototype tree via LuaJIT's jit.util, mapping
+-- every bytecode position to its source line. That yields the complete
+-- executable-line set, including bodies of functions no test ever called.
+
+-- Bound the prototype recursion. Deeply nested closures are legitimate, but an
+-- unbounded walk on a malformed or adversarial chunk must not blow the stack.
+local MAX_PROTO_DEPTH = 100
+
+local function collect_proto_lines(proto, acc, depth, util)
+	if depth > MAX_PROTO_DEPTH then
+		return acc
+	end
+
+	-- Walk bytecode positions; funcinfo(proto, pc) reports the source line for
+	-- that instruction. funcbc returns nil once pc runs past the last opcode.
+	local pc = 0
+	while true do
+		local ok, bc = pcall(util.funcbc, proto, pc)
+		if not ok or bc == nil then
+			break
+		end
+		local ok_info, info = pcall(util.funcinfo, proto, pc)
+		if ok_info and info and info.currentline and info.currentline > 0 then
+			acc[info.currentline] = true
+		end
+		pc = pc + 1
+	end
+
+	-- Child prototypes live among the GC constants at negative indices.
+	local i = -1
+	while true do
+		local ok, k = pcall(util.funck, proto, i)
+		if not ok or k == nil then
+			break
+		end
+		if type(k) == "proto" then
+			collect_proto_lines(k, acc, depth + 1, util)
+		end
+		i = i - 1
+	end
+
+	return acc
+end
+
+--- Fill in zero counts for executable lines that were never executed.
+---
+--- Only touches files already present in _neospec_coverage -- a file no test
+--- ever loaded has no entry and stays absent, because the hook never saw it.
+--- Recording it would require walking the source tree, which is the caller's
+--- job via its own include patterns.
+---
+--- Safe to call more than once: lines that already have a count keep it.
+function _neospec_coverage_finalize()
+	if type(_neospec_coverage) ~= "table" then
+		return
+	end
+
+	-- jit.util is LuaJIT-specific. Neovim always embeds LuaJIT, but degrade to
+	-- the previous hits-only behaviour rather than erroring if it is absent.
+	local ok_util, util = pcall(require, "jit.util")
+	if not ok_util or type(util) ~= "table" or type(util.funcbc) ~= "function" then
+		return
+	end
+
+	for path, lines in pairs(_neospec_coverage) do
+		if type(lines) == "table" then
+			-- loadfile compiles without executing, so this cannot re-run any
+			-- module side effects. A file that has moved or become unreadable
+			-- since it was required simply keeps its hits-only data.
+			local chunk = loadfile(path)
+			if chunk then
+				local executable = collect_proto_lines(chunk, {}, 0, util)
+				for line in pairs(executable) do
+					if lines[line] == nil then
+						lines[line] = 0
+					end
+				end
+			end
+		end
+	end
+end
+
 -- Note: debug.sethook sets the hook for the current thread only. Code executed
 -- inside coroutines is not covered. This is a known limitation of the
 -- single-thread hook model; coroutine-heavy test suites will report lower
