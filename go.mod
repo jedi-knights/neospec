@@ -4,6 +4,7 @@ go 1.23
 
 require (
 	github.com/BurntSushi/toml v1.4.0
+	github.com/jedi-knights/go-lua-parser v0.1.0
 	github.com/spf13/cobra v1.8.1
 )
 

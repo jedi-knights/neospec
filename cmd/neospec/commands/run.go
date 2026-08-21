@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/jedi-knights/neospec/internal/adapters/cover"
 	"github.com/jedi-knights/neospec/internal/adapters/neovim"
 	"github.com/jedi-knights/neospec/internal/adapters/reporter"
 	"github.com/jedi-knights/neospec/internal/adapters/runner"
@@ -117,6 +118,12 @@ func runTests(ctx context.Context, flags *runFlags, deps runDeps) error {
 	if suite == nil {
 		return nil // no test files found
 	}
+
+	// Populate source-derived branch info before reports are emitted.
+	// Runs after executeTests (which internally normalizes cov) so branch
+	// records survive the merge; runs before emitReports so BRDA lands in
+	// LCOV output.
+	cover.PopulateBranches(cov)
 
 	if err := emitReports(ctx, cfg, suite, cov); err != nil {
 		return err
