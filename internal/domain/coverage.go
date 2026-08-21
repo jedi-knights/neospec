@@ -17,6 +17,24 @@ type FunctionCoverage struct {
 	Count int
 }
 
+// BranchCoverage describes one source-derived branch point in a file with
+// per-arm hit information matched against line coverage.
+type BranchCoverage struct {
+	Line   int
+	Column int
+	Kind   string // "if" | "elseif" | "while" | "repeat" | "for"
+	Arms   []BranchArm
+}
+
+// BranchArm is one alternative code path from a BranchCoverage. Taken == -1
+// means the arm's hit count could not be derived from available line
+// coverage (typically an implicit fall-through with no locatable body);
+// consumers render it as "unknown" (e.g., `-` in LCOV BRDA).
+type BranchArm struct {
+	Taken int
+	Label string
+}
+
 // FileCoverage holds line-level execution counts for one source file.
 // Lines is a map from 1-based line number to the number of times that line
 // was executed during the test run.
@@ -29,6 +47,10 @@ type FileCoverage struct {
 	// Functions lists the functions defined in this file. May be empty for
 	// files that define none.
 	Functions []FunctionCoverage
+	// Branches lists source-derived branch points, populated separately
+	// from the runtime hook (see internal/adapters/cover.PopulateBranches).
+	// May be empty for files that were not parsed or have no branches.
+	Branches []BranchCoverage
 }
 
 // HitFunctions returns the number of functions executed at least once.
@@ -61,6 +83,31 @@ func (f *FileCoverage) HitLines() int {
 // TotalLines returns the number of instrumented lines.
 func (f *FileCoverage) TotalLines() int {
 	return len(f.Lines)
+}
+
+// TotalBranches returns the total number of branch arms across all branch
+// points in this file (2 per if/while/for/etc.). Equal to LCOV's BRF.
+func (f *FileCoverage) TotalBranches() int {
+	n := 0
+	for _, b := range f.Branches {
+		n += len(b.Arms)
+	}
+	return n
+}
+
+// HitBranches returns the number of arms taken at least once. Arms whose
+// Taken is -1 (unknown, no locatable body) do not count as hit. Equal to
+// LCOV's BRH.
+func (f *FileCoverage) HitBranches() int {
+	n := 0
+	for _, b := range f.Branches {
+		for _, a := range b.Arms {
+			if a.Taken > 0 {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // Percentage returns the line coverage percentage for this file, or 0 if there
