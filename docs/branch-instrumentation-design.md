@@ -195,17 +195,39 @@ stays on the same source line as the closing `end`.
 Ordered by impact-per-risk. Each phase ships behind the same opt-in
 flag; users get incremental precision as later phases land.
 
-- **Phase 1 — same-line resolution.** Inject `_neospec_br(N);` as the
-  first statement of every arm body (if/elseif/else/while/repeat/for).
-  Solves same-line ambiguity and eliminates the "unknown" for
+- **Phase 1 — same-line resolution.** ✅ Shipped in PRs #35 (rewriter
+  primitive) and #38 (runtime plumbing). Injects `_neospec_br(N);` as
+  the first statement of every arm body (if/elseif/else/while/repeat/
+  for). Solves same-line ambiguity and eliminates the "unknown" for
   reachable arms. Zero effect on `and`/`or` and on implicit
   fall-through arms.
-- **Phase 2 — short-circuit resolution.** Wrap `and`/`or` RHS in IIFEs
-  so the counter fires only on evaluation. Adds meaningful branch
-  count for the most common Lua idiom (`x = t or default`).
-- **Phase 3 — implicit-arm resolution.** Inject synthetic `else`
-  clauses for if-without-else and post-loop counters for
-  `while`/`for`/`repeat`. Closes the last "unknown" arm.
+- **Phase 2 — short-circuit resolution.** 🚫 **Deferred.** Wrap
+  `and`/`or` RHS in IIFEs so the counter fires only on evaluation.
+  Adds meaningful branch count for the most common Lua idiom
+  (`x = t or default`).
+
+  Deferral reason: the IIFE wrap needs the RHS expression's end
+  offset in the source to place its closing bracket, and
+  `go-lua-parser` v0.1.0 only tracks `Pos()` (start), not `End()`.
+  Adding `End()` is a breaking v0.2.0 API change touching all 15
+  expression types and ~20 parser construction sites — a multi-PR
+  arc across two repos for a feature that scores 2 on the ranking
+  rubric (below the 6-threshold "ship if" line). Revisit when a
+  concrete user asks or when we're changing the parser for another
+  reason and can bundle.
+
+  If a partial Phase 2 becomes worth doing, the limited variant that
+  only rewrites short-circuit expressions whose RHS is a "simple"
+  node (`Ident`, `NumberExpr`, `StringExpr` — where `End = Pos +
+  len(Text)`) is ~150 LOC in neospec with no parser dependency
+  churn. Covers `x = t or "default"` and skips `x = f() or g()`.
+- **Phase 3 — implicit-arm resolution.** Not started. Inject synthetic
+  `else` clauses for if-without-else and post-loop counters for
+  `while`/`for`/`repeat`. Closes the last "unknown" arm. Same rubric
+  question applies before starting — plausibly higher-value than
+  Phase 2 because implicit arms are ubiquitous, but also gated on the
+  parser change (post-loop counter insertion needs the loop
+  statement's end offset).
 
 Ship each phase as its own PR with regression tests against a corpus
 of realistic Lua (extend `testdata/` with harpoon, plenary, or
