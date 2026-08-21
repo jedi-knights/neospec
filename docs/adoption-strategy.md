@@ -12,13 +12,16 @@ The three features that differentiate neospec from `plenary.busted` / `mini.test
 | Neovim version pinning per run | ✅ | ❌ | ❌ |
 | Sandboxed XDG env per run | ✅ | ❌ | ❌ |
 | Line-level Lua coverage | ✅ | ❌ | partial |
+| Branch-level Lua coverage (BRDA/BRF/BRH, source-derived) | ✅ | ❌ | ❌ |
 | LCOV / Cobertura / JUnit / Coveralls output | ✅ | ❌ | ❌ |
 | First-class GitHub Action | ✅ | via boilerplate | via boilerplate |
 | Ecosystem gravity | small | huge | growing |
 
 The wedge is **compatibility**: neospec's harness (`describe` / `it` / `before_each` / `after_each` / `pending` / `assert.*`) implements the same DSL names as `plenary.busted`, so any file already written for busted will run under neospec with zero source changes. That compatibility is what makes migration risk-free — and it is the single most important invariant to preserve as neospec evolves.
 
-**Branch coverage (BRDA in LCOV)** is the next planned differentiator on the coverage axis. It requires Go-side static analysis of Lua source, which is provided by the companion repo [`go-lua-parser`](https://github.com/jedi-knights/go-lua-parser) — published standalone (MIT, same license) so other Go tooling that reasons about Lua source can consume it. Consumption in neospec lives in `internal/adapters/cover/`. See "Companion repos" below for the reasoning that keeps this inside the swim lane.
+**Branch coverage (BRDA)** shipped across all three reporters: LCOV emits `BRDA/BRF/BRH`, Cobertura emits per-line `branch="true"` + `condition-coverage` + `<condition/>` elements with `branch-rate` roll-ups, and Coveralls emits the flat `branches` quadruple array. All three read the same source-derived `BranchCoverage` produced by `internal/adapters/cover.PopulateBranches`, which locates branch points via the companion repo [`go-lua-parser`](https://github.com/jedi-knights/go-lua-parser) — published standalone (MIT, same license) so other Go tooling that reasons about Lua source can consume it. See "Companion repos" below for why the AST work stays inside the swim lane despite touching source analysis.
+
+Per-arm hit counts come from the existing line hook — no runtime instrumentation. Two shapes cannot be honestly scored from line hits alone: **same-line constructs** (`if x then A end` on one line — the decision and body share a hit count, so per-arm attribution is guesswork) and **short-circuit operators** (`and`/`or` — RHS evaluation is invisible without extra hooks). Those arms are recorded as "unknown" (LCOV `-`, Cobertura `0%`, Coveralls `0`) rather than falsely claimed as hit. Aggregate treatment is uniform across formats: unknown excluded from the hit numerator, included in the total. Closing this gap needs source rewriting before execution — a swim-lane-crossing change that warrants its own design pass, not a reporter add-on.
 
 ## Compatibility invariant (do not break)
 
