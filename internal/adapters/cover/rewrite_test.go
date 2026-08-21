@@ -23,20 +23,51 @@ func TestRewriteInjectsAtIfArmBody(t *testing.T) {
 	}
 }
 
-func TestRewriteIfElseifElseNumbersArmsInOrder(t *testing.T) {
-	// Arm indices must match domain BranchCoverage.Arms ordering so
-	// attribution can match injections back to arms without extra
-	// bookkeeping: 0 = then, 1..N = elseifs, N+1 = else.
+func TestRewriteIfElseifElseArmIndicesMatchDetector(t *testing.T) {
+	// The detector creates a separate 2-arm branch per decision (if +
+	// each elseif), each with arms [then=0, else=1]. Every injection
+	// therefore attributes to arm 0 of ITS OWN decision — except the
+	// terminal else clause, which is arm 1 of the LAST decision
+	// (the last elseif when present, otherwise the if).
+	//
+	// An earlier revision numbered arms as 0,1,2,3 (as if all bodies
+	// were arms of one virtual combined branch); ApplyBranchCounters
+	// would then miss the arm on every elseif and drop the else
+	// counter entirely. See planIf's comment for the full story.
 	src := []byte("if x then A() elseif y then B() elseif z then C() else D() end")
 	_, injections, _ := Rewrite("t.lua", src, RewriteOptions{})
 	if len(injections) != 4 {
 		t.Fatalf("got %d injections, want 4 (then + 2 elseifs + else)", len(injections))
 	}
-	wantArms := []int{0, 1, 2, 3}
+	wantArms := []int{0, 0, 0, 1}
 	for i, want := range wantArms {
 		if injections[i].ArmIndex != want {
 			t.Errorf("injection %d: ArmIndex = %d, want %d", i, injections[i].ArmIndex, want)
 		}
+	}
+}
+
+func TestRewriteIfElseifElseTargetsCorrectDecisionLine(t *testing.T) {
+	// The else clause's injection must reference the LAST decision's
+	// line, not the outer if's line — otherwise attribution looks up
+	// (if_line, arm 1) which is a different branch than the one the
+	// counter should land on.
+	src := []byte("if x then\n  A()\nelseif y then\n  B()\nelse\n  C()\nend")
+	_, injections, _ := Rewrite("t.lua", src, RewriteOptions{})
+	if len(injections) != 3 {
+		t.Fatalf("got %d injections, want 3", len(injections))
+	}
+	// injections[0] = then arm of if (line 1), armIdx 0
+	// injections[1] = then arm of elseif (line 3), armIdx 0
+	// injections[2] = else clause, arm 1 of the LAST decision (line 3)
+	if injections[0].Line != 1 || injections[0].ArmIndex != 0 {
+		t.Errorf("then injection = %+v, want line=1 arm=0", injections[0])
+	}
+	if injections[1].Line != 3 || injections[1].ArmIndex != 0 {
+		t.Errorf("elseif injection = %+v, want line=3 arm=0", injections[1])
+	}
+	if injections[2].Line != 3 || injections[2].ArmIndex != 1 {
+		t.Errorf("else injection = %+v, want line=3 arm=1 (last decision)", injections[2])
 	}
 }
 
