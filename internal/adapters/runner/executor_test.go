@@ -565,3 +565,98 @@ func TestParseOutput_LuaReporterError(t *testing.T) {
 		t.Error("parseOutput() expected error when Lua reporter emits an error field, got nil")
 	}
 }
+
+// TestParseOutput_BranchCountsPopulated pins that parseOutput lifts
+// br_counts from the reporter JSON onto CoverageData.BranchCounters
+// so downstream ApplyBranchCounters attribution can read them.
+func TestParseOutput_BranchCountsPopulated(t *testing.T) {
+	raw := []byte(`{"tests":[],"coverage":[],"br_counts":{"1":5,"7":3}}`)
+	_, cov, err := parseOutput(raw)
+	if err != nil {
+		t.Fatalf("parseOutput: %v", err)
+	}
+	if cov.BranchCounters[1] != 5 || cov.BranchCounters[7] != 3 {
+		t.Errorf("BranchCounters = %v, want map[1:5 7:3]", cov.BranchCounters)
+	}
+}
+
+// TestParseOutput_NoBranchCountsLeavesFieldNil confirms the field
+// stays nil when br_counts is absent (instrumentation off) or empty
+// (instrumented but nothing fired). ApplyBranchCounters treats both
+// as no-ops.
+func TestParseOutput_NoBranchCountsLeavesFieldNil(t *testing.T) {
+	raw := []byte(`{"tests":[],"coverage":[]}`)
+	_, cov, err := parseOutput(raw)
+	if err != nil {
+		t.Fatalf("parseOutput: %v", err)
+	}
+	if cov.BranchCounters != nil {
+		t.Errorf("BranchCounters = %v, want nil", cov.BranchCounters)
+	}
+}
+
+// TestRunner_Injections_NilByDefault confirms accessor returns nil
+// when WithSourceRewriter was not set. Callers rely on this to skip
+// attribution in the non-instrumented path.
+func TestRunner_Injections_NilByDefault(t *testing.T) {
+	r := &Runner{}
+	if r.Injections() != nil {
+		t.Errorf("Injections() = %v, want nil", r.Injections())
+	}
+	if r.BranchCounts() != nil {
+		t.Errorf("BranchCounts() = %v, want nil", r.BranchCounts())
+	}
+}
+
+// TestRunner_WithSourceRewriter_StoresCallback checks the builder-
+// method assignment. Actual invocation (during Run) is exercised by
+// higher-level tests that don't need a live Neovim.
+func TestRunner_WithSourceRewriter_StoresCallback(t *testing.T) {
+	r := &Runner{}
+	called := false
+	fn := func(paths []string) (map[string]string, any) {
+		called = true
+		return nil, nil
+	}
+	if r.WithSourceRewriter(fn) != r {
+		t.Error("WithSourceRewriter should return the receiver for chaining")
+	}
+	if r.srcRewriterFn == nil {
+		t.Fatal("srcRewriterFn not stored")
+	}
+	// Invoke the stored callback so `called` gets touched — verifies
+	// the assignment is the actual function, not a copy of the zero
+	// value.
+	r.srcRewriterFn(nil)
+	if !called {
+		t.Error("stored callback did not run when invoked")
+	}
+}
+
+// TestRunner_MergeBranchCounts_SumsAcrossCalls exercises the helper
+// extracted from Run for cyclomatic budget. Two subprocess payloads
+// hitting the same counter ID should combine, not overwrite — same
+// aggregation semantics as line coverage.
+func TestRunner_MergeBranchCounts_SumsAcrossCalls(t *testing.T) {
+	r := &Runner{}
+	r.mergeBranchCounts(map[int]int{1: 3, 2: 4})
+	r.mergeBranchCounts(map[int]int{1: 2, 3: 7})
+	want := map[int]int{1: 5, 2: 4, 3: 7}
+	for id, w := range want {
+		if r.branchCounts[id] != w {
+			t.Errorf("branchCounts[%d] = %d, want %d", id, r.branchCounts[id], w)
+		}
+	}
+}
+
+// TestRunner_MergeBranchCounts_EmptyIsNoOp pins the early-return path
+// so a subprocess without instrumentation doesn't force allocation of
+// the counters map.
+func TestRunner_MergeBranchCounts_EmptyIsNoOp(t *testing.T) {
+	r := &Runner{}
+	r.mergeBranchCounts(nil)
+	r.mergeBranchCounts(map[int]int{})
+	if r.branchCounts != nil {
+		t.Errorf("branchCounts = %v, want nil (no allocation)", r.branchCounts)
+	}
+}

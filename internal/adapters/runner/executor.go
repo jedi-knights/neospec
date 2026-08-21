@@ -38,6 +38,25 @@ type Runner struct {
 	// the hook falls back to its NAME_PATTERNS regexes.
 	funcNamesFn   FunctionNameResolver
 	functionNames map[string]map[int]string
+	// srcRewriterFn, when non-nil, resolves per-file rewritten source for
+	// branch instrumentation. The Runner emits the result as a
+	// _neospec_rewritten_sources Lua global; the coverage hook's package.
+	// loaders shim serves those bytes under the original file path so
+	// debug.getinfo(...).source still resolves correctly. See
+	// docs/branch-instrumentation-design.md.
+	srcRewriterFn    SourceRewriteResolver
+	rewrittenSources map[string]string
+	// injections is the opaque metadata the resolver returned alongside
+	// the source map. Exposed via Injections() so the CLI can hand it to
+	// cover.ApplyBranchCounters after Run(). Held as any to keep this
+	// package from importing cover (which imports runner — the same
+	// cycle avoidance as FunctionNameResolver).
+	injections any
+	// branchCounts is the aggregated _neospec_br_counts across every
+	// test-file subprocess. Populated as parseOutput reads each
+	// subprocess's JSON; summed rather than replaced so require()'d
+	// modules accumulate counts across the files that exercised them.
+	branchCounts map[int]int
 }
 
 // FunctionNameResolver returns a two-level (path, line) → name map for
@@ -46,6 +65,17 @@ type Runner struct {
 // so this package does not import cover (which itself imports runner —
 // avoiding a cycle).
 type FunctionNameResolver func(paths []string) map[string]map[int]string
+
+// SourceRewriteResolver returns rewritten source for each of the given
+// paths (as {path → rewritten_source}), plus opaque metadata that
+// Runner.Injections() surfaces after Run() so the CLI can attribute
+// runtime counter values back to source positions. Implementation lives
+// in internal/adapters/cover.RewriteAll; kept behind an interface here
+// for the same cycle-avoidance reason as FunctionNameResolver.
+//
+// The metadata is opaque to the runner (returned as any) so we can
+// evolve the injection type without churning the runner API.
+type SourceRewriteResolver func(paths []string) (map[string]string, any)
 
 // New creates a Runner.
 //   - nvimPath: absolute path to the nvim binary obtained from NeovimProvider.Ensure.
@@ -127,6 +157,58 @@ func (r *Runner) WithFunctionNameResolver(fn FunctionNameResolver) *Runner {
 	return r
 }
 
+// WithSourceRewriter sets a callback that produces rewritten Lua source
+// for the resolved coverage sources, plus opaque injection metadata for
+// post-run attribution. When set, the runner emits the rewritten source
+// as a _neospec_rewritten_sources Lua global; the coverage hook's
+// package.loaders shim serves those bytes for each known path under the
+// original file name. Wire in cover.RewriteAll from the CLI.
+//
+// The metadata is available via Injections() after Run completes; hand
+// it to cover.ApplyBranchCounters along with BranchCounts() to attribute
+// runtime counters to arms.
+//
+// Nil is the default and disables branch instrumentation: no global is
+// emitted, no source is rewritten, and every file loads via Neovim's
+// default loader.
+func (r *Runner) WithSourceRewriter(fn SourceRewriteResolver) *Runner {
+	r.srcRewriterFn = fn
+	return r
+}
+
+// Injections returns the opaque metadata produced by the source-rewrite
+// resolver during the last Run. Nil until Run has been called and only
+// non-nil when WithSourceRewriter was set. Callers type-assert to their
+// expected concrete type (typically []cover.Injection).
+func (r *Runner) Injections() any {
+	return r.injections
+}
+
+// BranchCounts returns the aggregated _neospec_br_counts map across
+// every test-file subprocess run in the last Run. Nil when no
+// instrumentation was active or no counter fired. Sum semantics: a
+// counter that fires in two subprocesses (e.g., via a require()'d
+// module exercised by two test files) is reported as the sum of both
+// subprocesses' hits.
+func (r *Runner) BranchCounts() map[int]int {
+	return r.branchCounts
+}
+
+// mergeBranchCounts sums a subprocess's per-branch counter map into
+// r.branchCounts. Extracted from Run for cyclomatic-complexity budget
+// reasons and to make the sum semantics grep-able.
+func (r *Runner) mergeBranchCounts(counts map[int]int) {
+	if len(counts) == 0 {
+		return
+	}
+	if r.branchCounts == nil {
+		r.branchCounts = make(map[int]int, len(counts))
+	}
+	for id, hits := range counts {
+		r.branchCounts[id] += hits
+	}
+}
+
 // Discover satisfies the discovery half of ports.TestRunner.
 func (r *Runner) Discover(ctx context.Context, patterns []string) ([]string, error) {
 	return Discover(ctx, patterns)
@@ -158,6 +240,18 @@ func (r *Runner) Run(ctx context.Context, files []string) (*domain.SuiteResult, 
 	// Cheap: parsing is fast and the map is shared across workers.
 	if r.funcNamesFn != nil {
 		r.functionNames = r.funcNamesFn(r.resolvedSources)
+	}
+
+	// Rewrite source for branch instrumentation once, before any worker
+	// starts, so every subprocess uses byte-identical rewritten bytes
+	// and BranchIDs stay stable across subprocess boundaries. Reset
+	// per-Run state so a Runner reused across Runs does not carry
+	// stale injections or counters into the next attribution pass.
+	r.injections = nil
+	r.branchCounts = nil
+	r.rewrittenSources = nil
+	if r.srcRewriterFn != nil {
+		r.rewrittenSources, r.injections = r.srcRewriterFn(r.resolvedSources)
 	}
 
 	// Feed file indices to workers via a buffered jobs channel.
@@ -227,6 +321,7 @@ func (r *Runner) Run(ctx context.Context, files []string) (*domain.SuiteResult, 
 		suite.Tests = append(suite.Tests, res.suite.Tests...)
 		if res.cov != nil {
 			cov.Files = append(cov.Files, res.cov.Files...)
+			r.mergeBranchCounts(res.cov.BranchCounters)
 		}
 	}
 	suite.Duration = time.Since(start)
@@ -236,6 +331,11 @@ func (r *Runner) Run(ctx context.Context, files []string) (*domain.SuiteResult, 
 	// totals and hits are multiplied by however many subprocesses happened to
 	// load each file, and the resulting percentage is meaningless.
 	cov.Normalize()
+
+	// Surface the aggregated branch counts on the returned CoverageData
+	// too, so callers that don't retain a Runner reference (e.g. tests
+	// using ParseReporterOutput directly) still see them.
+	cov.BranchCounters = r.branchCounts
 
 	// Propagate context cancellation so callers can distinguish "the run was
 	// aborted" from "all test files failed normally".
@@ -250,10 +350,16 @@ func (r *Runner) Run(ctx context.Context, files []string) (*domain.SuiteResult, 
 // serialisation fails; if non-empty, it indicates a harness-level failure
 // and parseOutput surfaces it as a Go error rather than silently returning
 // an empty suite and coverage.
+//
+// BranchCounts is populated only when branch instrumentation was active
+// AND at least one counter fired — reporter.lua omits the field on empty
+// counts so a "field absent" state is distinguishable from "instrumented
+// but nothing hit" (empty map).
 type runOutput struct {
-	Tests    []testJSON     `json:"tests"`
-	Coverage []coverageJSON `json:"coverage"`
-	Error    string         `json:"error,omitempty"`
+	Tests        []testJSON     `json:"tests"`
+	Coverage     []coverageJSON `json:"coverage"`
+	BranchCounts map[int]int    `json:"br_counts,omitempty"`
+	Error        string         `json:"error,omitempty"`
 }
 
 type testJSON struct {
@@ -311,7 +417,7 @@ func (r *Runner) runOne(ctx context.Context, testFile string) (suite *domain.Sui
 
 	// Write the combined harness+hook Lua shim into the sandbox.
 	shimPath := filepath.Join(sb.Dir(), "neospec_run.lua")
-	shim, err := buildShim(testFile, r.initFile, r.coverageInclude, r.resolvedSources, r.functionNames)
+	shim, err := buildShim(testFile, r.initFile, r.coverageInclude, r.resolvedSources, r.functionNames, r.rewrittenSources)
 	if err != nil {
 		return nil, nil, fmt.Errorf("building shim: %w", err)
 	}
@@ -388,6 +494,14 @@ func parseOutput(data []byte) (*domain.SuiteResult, *domain.CoverageData, error)
 			fileCov.Lines[lineNo] = count
 		}
 		cov.Files = append(cov.Files, fileCov)
+	}
+
+	// Branch instrumentation counters. Reporter emits the field only
+	// when the map is non-empty, so a nil out.BranchCounts means either
+	// instrumentation was off or every counter was zero — either way
+	// there is nothing to attribute.
+	if len(out.BranchCounts) > 0 {
+		cov.BranchCounters = out.BranchCounts
 	}
 
 	return suite, cov, nil

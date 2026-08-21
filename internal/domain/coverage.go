@@ -123,6 +123,13 @@ func (f *FileCoverage) Percentage() float64 {
 // CoverageData is the aggregated coverage for an entire test run.
 type CoverageData struct {
 	Files []*FileCoverage
+	// BranchCounters carries raw _neospec_br_counts values from a
+	// branch-instrumented run. Not persisted to reports (the reporter
+	// reads FileCoverage.Branches after ApplyBranchCounters has run);
+	// exposed only so callers can pass it back to
+	// cover.ApplyBranchCounters alongside the injection metadata. Nil
+	// when instrumentation was inactive.
+	BranchCounters map[int]int `json:"-"`
 }
 
 // TotalLines returns the total number of instrumented lines across all files.

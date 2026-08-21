@@ -228,6 +228,45 @@ func TestLoad_EnvVarOverrides(t *testing.T) {
 	}
 }
 
+// TestLoad_EnvBranchInstrumentation pins the branch-instrumentation
+// env-var parsing. Uses strconv.ParseBool so both "1" and "true" opt
+// in; unrecognised values (including "false") leave the flag off,
+// matching the default. Empty string is also off (no env var set).
+func TestLoad_EnvBranchInstrumentation(t *testing.T) {
+	// Clear other env vars first so an ambient value doesn't bleed
+	// into this test's assertions.
+	for _, key := range []string{
+		"NEOSPEC_NEOVIM_VERSION", "NEOSPEC_TEST_PATTERNS", "NEOSPEC_COVERAGE_DIR",
+		"NEOSPEC_FORMATS", "NEOSPEC_CACHE_DIR", "NEOSPEC_VERBOSE",
+		"NEOSPEC_INIT_FILE", "NEOSPEC_THRESHOLD",
+	} {
+		t.Setenv(key, "")
+	}
+
+	cases := []struct {
+		env  string
+		want bool
+	}{
+		{"1", true},
+		{"true", true},
+		{"TRUE", true},
+		{"0", false},
+		{"false", false},
+		{"garbage", false}, // unparseable → default (off)
+	}
+	for _, c := range cases {
+		t.Setenv("NEOSPEC_BRANCH_INSTRUMENTATION", c.env)
+		cfg, err := Load("")
+		if err != nil {
+			t.Fatalf("Load(%q) error: %v", c.env, err)
+		}
+		if cfg.BranchInstrumentation != c.want {
+			t.Errorf("BranchInstrumentation(%q) = %v, want %v",
+				c.env, cfg.BranchInstrumentation, c.want)
+		}
+	}
+}
+
 // TestLoad_EnvThresholdOverride checks that NEOSPEC_THRESHOLD overrides the
 // default threshold value.
 func TestLoad_EnvThresholdOverride(t *testing.T) {
