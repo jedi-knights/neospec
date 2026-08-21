@@ -143,6 +143,27 @@ func (c *CoverageData) HitLines() int {
 	return n
 }
 
+// TotalBranches returns the total number of branch arms across all files.
+// Equal to LCOV's aggregate BRF.
+func (c *CoverageData) TotalBranches() int {
+	n := 0
+	for _, f := range c.Files {
+		n += f.TotalBranches()
+	}
+	return n
+}
+
+// HitBranches returns the total number of arms taken at least once across
+// all files. Arms with Taken == -1 (unknown) do not count. Equal to LCOV's
+// aggregate BRH.
+func (c *CoverageData) HitBranches() int {
+	n := 0
+	for _, f := range c.Files {
+		n += f.HitBranches()
+	}
+	return n
+}
+
 // Percentage returns the overall line coverage percentage across all files,
 // or 0 if no lines are instrumented.
 func (c *CoverageData) Percentage() float64 {
