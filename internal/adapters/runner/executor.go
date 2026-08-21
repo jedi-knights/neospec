@@ -30,7 +30,22 @@ type Runner struct {
 	// resolvedSources is populated once per Run from coverageSources so the
 	// glob walk does not repeat for every test file.
 	resolvedSources []string
+	// funcNamesFn, when non-nil, resolves a per-file function-name map for
+	// the resolved coverage sources. The Runner emits its result as a
+	// _neospec_function_names Lua global so the coverage hook can look up
+	// definition names by (path, line) rather than pattern-matching. Set
+	// by WithFunctionNameResolver; when nil the runner emits nothing and
+	// the hook falls back to its NAME_PATTERNS regexes.
+	funcNamesFn   FunctionNameResolver
+	functionNames map[string]map[int]string
 }
+
+// FunctionNameResolver returns a two-level (path, line) → name map for
+// the given resolved source paths. Implementation lives in
+// internal/adapters/cover.FunctionNameMap; kept behind an interface here
+// so this package does not import cover (which itself imports runner —
+// avoiding a cycle).
+type FunctionNameResolver func(paths []string) map[string]map[int]string
 
 // New creates a Runner.
 //   - nvimPath: absolute path to the nvim binary obtained from NeovimProvider.Ensure.
@@ -99,6 +114,19 @@ func (r *Runner) WithCoverageSources(patterns []string) *Runner {
 	return r
 }
 
+// WithFunctionNameResolver sets a callback that returns a (path, line) →
+// name map for the resolved coverage sources. When set, the runner emits
+// the result as a _neospec_function_names Lua global so the coverage hook
+// can look up definition names via AST-recovered data instead of source-
+// line pattern matching. Wire in cover.FunctionNameMap from the CLI.
+//
+// Nil is the default and preserves current behaviour: no global emitted,
+// the hook falls back to its NAME_PATTERNS regexes.
+func (r *Runner) WithFunctionNameResolver(fn FunctionNameResolver) *Runner {
+	r.funcNamesFn = fn
+	return r
+}
+
 // Discover satisfies the discovery half of ports.TestRunner.
 func (r *Runner) Discover(ctx context.Context, patterns []string) ([]string, error) {
 	return Discover(ctx, patterns)
@@ -124,6 +152,13 @@ func (r *Runner) Run(ctx context.Context, files []string) (*domain.SuiteResult, 
 	// Resolve coverage source globs once, before any worker starts, so the
 	// walk happens a single time and the workers see a stable slice.
 	r.resolvedSources = r.resolveCoverageSources(ctx)
+
+	// Extract function names from the resolved sources once, before any
+	// worker starts, so every subprocess's shim carries the same map.
+	// Cheap: parsing is fast and the map is shared across workers.
+	if r.funcNamesFn != nil {
+		r.functionNames = r.funcNamesFn(r.resolvedSources)
+	}
 
 	// Feed file indices to workers via a buffered jobs channel.
 	jobs := make(chan int, n)
@@ -276,7 +311,7 @@ func (r *Runner) runOne(ctx context.Context, testFile string) (suite *domain.Sui
 
 	// Write the combined harness+hook Lua shim into the sandbox.
 	shimPath := filepath.Join(sb.Dir(), "neospec_run.lua")
-	shim, err := buildShim(testFile, r.initFile, r.coverageInclude, r.resolvedSources)
+	shim, err := buildShim(testFile, r.initFile, r.coverageInclude, r.resolvedSources, r.functionNames)
 	if err != nil {
 		return nil, nil, fmt.Errorf("building shim: %w", err)
 	}
