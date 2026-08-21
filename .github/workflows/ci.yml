@@ -84,3 +84,57 @@ jobs:
         with:
           files: test-results.json
           check-name: Test Results
+
+  e2e:
+    name: E2E (real Neovim)
+    runs-on: ubuntu-latest
+    # Timeout is generous — the download + tar + a single nvim run
+    # takes well under 2 minutes in practice, but 10 gives headroom
+    # for GitHub runner variance.
+    timeout-minutes: 10
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Neovim install: pinned tag rather than `stable` so CI is
+      # reproducible across upstream releases. Bump the tag here (and
+      # the tarball asset name if upstream rearranges it) when we
+      # want a newer runtime; no other CI-side changes needed. The
+      # 0.10 line is what neospec's harness requires (uses vim.uv).
+      - name: Install Neovim v0.10.4
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 --retry-delay 2 \
+            https://github.com/neovim/neovim/releases/download/v0.10.4/nvim-linux64.tar.gz \
+            -o /tmp/nvim.tar.gz
+          tar -xzf /tmp/nvim.tar.gz -C /tmp
+          echo "/tmp/nvim-linux64/bin" >> "$GITHUB_PATH"
+
+      # Log the version so a future upstream break is obvious in the
+      # run output rather than manifesting as a mysterious test
+      # failure downstream.
+      - name: Verify Neovim
+        run: nvim --version
+
+      # Only the E2E test itself — the scripted integration test that
+      # covers the same pipeline without needing Neovim already ran in
+      # the `test` job. Explicit -run guards against picking up a
+      # future TestBranchInstrumentation_TrueE2E-adjacent test that
+      # isn't yet ready to depend on real Neovim.
+      - name: Run E2E test
+        env:
+          NEOSPEC_E2E: "1"
+        run: |
+          go test -race -count=1 \
+            -run '^TestBranchInstrumentation_TrueE2E$' \
+            ./internal/adapters/cover/...
