@@ -12,6 +12,68 @@ _neospec_coverage_loaded = true
 
 _neospec_coverage = _neospec_coverage or {}
 
+-- Branch instrumentation counter store. When the Go side has rewritten
+-- source files via cover.RewriteAll, every arm body starts with a call
+-- to _neospec_br(N) that increments the corresponding counter here. The
+-- reporter emits this table so the runner can call
+-- cover.ApplyBranchCounters to attribute counts to BranchArm.Taken.
+--
+-- Both are guarded against re-execution: if the Go side ran the shim
+-- twice for some reason (e.g. a nested dofile of neospec_run.lua), the
+-- second pass keeps whatever counts the first accumulated rather than
+-- zeroing them.
+_neospec_br_counts = _neospec_br_counts or {}
+if type(_neospec_br) ~= "function" then
+	function _neospec_br(id)
+		_neospec_br_counts[id] = (_neospec_br_counts[id] or 0) + 1
+	end
+end
+
+-- If the Go side supplied a rewritten-source map, install a
+-- package.loaders shim so require()'d modules whose path is in the map
+-- get their rewritten bytes instead of the on-disk source. The shim is
+-- prepended so it wins over the file loader; unmatched paths return nil
+-- so subsequent loaders (the default file loader) handle them normally.
+--
+-- Chunk name is "@" + original_path so debug.getinfo(...).source still
+-- resolves to the user's file — line coverage, stack traces, and any
+-- source-line lookup (e.g. NAME_PATTERNS fallback in function_name)
+-- continue to see the original path, not a shadow.
+if type(_neospec_rewritten_sources) == "table" and next(_neospec_rewritten_sources) ~= nil then
+	local loaders = package.loaders or package.searchers
+	if type(loaders) == "table" then
+		local function rewritten_loader(modname)
+			-- Reproduce the default file-loader's path resolution so
+			-- the map lookup key matches what the on-disk loader would
+			-- have opened. package.searchpath (Lua 5.2+ / LuaJIT with
+			-- 5.2 compat) does exactly this; fall back to nil (skip)
+			-- if it is absent so unsupported runtimes just use the
+			-- default loader.
+			if type(package.searchpath) ~= "function" then
+				return nil
+			end
+			local path = package.searchpath(modname, package.path)
+			if path == nil then
+				return nil
+			end
+			local src = _neospec_rewritten_sources[path]
+			if src == nil then
+				return nil
+			end
+			-- @-prefix marks a file source so debug.getinfo(...).source
+			-- reports the path; the third arg "t" restricts to text
+			-- (no bytecode) — matches how the default loader treats
+			-- .lua files.
+			local chunk, err = load(src, "@" .. path, "t")
+			if chunk == nil then
+				return err
+			end
+			return chunk
+		end
+		table.insert(loaders, 1, rewritten_loader)
+	end
+end
+
 -- _neospec_is_test_source returns true for source files that belong to the
 -- project under test (i.e. not the harness or hook itself).
 local function is_project_source(source)

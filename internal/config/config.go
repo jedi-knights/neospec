@@ -53,6 +53,18 @@ type Config struct {
 	//
 	// Example: coverage_source = ["lua/**/*.lua"]
 	CoverageSource []string `toml:"coverage_source"`
+
+	// BranchInstrumentation opts into source-rewriting branch coverage.
+	// When true, files in CoverageSource are parsed and rewritten before
+	// being handed to Neovim: each control-flow arm gets a `_neospec_br(N);`
+	// call at its body's start so per-arm hit counts are recorded directly
+	// rather than derived from line hits. See docs/branch-instrumentation-design.md.
+	//
+	// Off by default. Costs: parse + string-splice per source file at
+	// run start (fast, measured in milliseconds for realistic corpora),
+	// plus one extra function call per branch-arm execution during the
+	// test run. Reports gain per-arm accuracy in return.
+	BranchInstrumentation bool `toml:"branch_instrumentation"`
 }
 
 // defaults returns a Config populated with built-in default values.
@@ -148,6 +160,15 @@ func applyEnv(cfg *Config) error {
 	}
 	if v := os.Getenv("NEOSPEC_COVERAGE_SOURCE"); v != "" {
 		cfg.CoverageSource = splitTrimmed(v, ",")
+	}
+	if v := strings.TrimSpace(os.Getenv("NEOSPEC_BRANCH_INSTRUMENTATION")); v != "" {
+		// Same true-set as the standard library's strconv.ParseBool: "1",
+		// "t", "T", "TRUE", "true", "True". Anything else (including
+		// "false" / "0") leaves the flag at its zero value (off).
+		b, err := strconv.ParseBool(v)
+		if err == nil {
+			cfg.BranchInstrumentation = b
+		}
 	}
 	return nil
 }

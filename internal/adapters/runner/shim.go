@@ -7,6 +7,58 @@ import (
 	"strings"
 )
 
+// writeRewrittenSources emits `_neospec_rewritten_sources = { [path] =
+// [==[ ... ]==], ... }` when the map is non-empty. Values are embedded
+// as long-bracket strings with the smallest level that doesn't collide
+// with any `]=*]` sequence inside the source — safer than double-quoted
+// escaping for large Lua bodies that may contain arbitrary control chars
+// inside string literals.
+//
+// Empty and nil inputs emit nothing so the coverage hook's package.
+// loaders shim never installs itself, and every file loads normally
+// through Neovim's default loader.
+func writeRewrittenSources(sb *strings.Builder, m map[string]string) {
+	if len(m) == 0 {
+		return
+	}
+	paths := make([]string, 0, len(m))
+	for p := range m {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+
+	sb.WriteString("_neospec_rewritten_sources = {\n")
+	for _, path := range paths {
+		src := m[path]
+		level := longBracketLevel(src)
+		eq := strings.Repeat("=", level)
+		// Newline right after the opening bracket is eaten by Lua's
+		// long-bracket rules; add one so any leading whitespace in
+		// src is preserved.
+		fmt.Fprintf(sb, "  [%q] = [%s[\n%s]%s],\n", path, eq, src, eq)
+	}
+	sb.WriteString("}\n")
+}
+
+// longBracketLevel returns the smallest N such that `]` followed by N
+// `=` signs followed by `]` does not appear in src. That marker (level
+// N) is then safe to use as the closing delimiter of a Lua long-bracket
+// string containing src.
+//
+// Bounded: Lua source cannot contain arbitrarily long `]=*]` runs
+// because they aren't syntactically valid outside string literals, but
+// the loop is capped defensively at 32 to prevent any pathological
+// input from spinning.
+func longBracketLevel(src string) int {
+	for level := 0; level < 32; level++ {
+		marker := "]" + strings.Repeat("=", level) + "]"
+		if !strings.Contains(src, marker) {
+			return level
+		}
+	}
+	return 32
+}
+
 // writeFunctionNames emits `_neospec_function_names = { [path] = { [line]
 // = "name", ... }, ... }` when the map is non-empty. Paths and line
 // numbers are sorted so identical inputs always produce identical shim
@@ -100,7 +152,7 @@ func ReporterSource() ([]byte, error) {
 // buildShim returns an error if either path contains a NUL byte. LuaJIT (used
 // by Neovim) truncates double-quoted strings at NUL, producing a silent
 // "file not found" rather than a clear diagnostic.
-func buildShim(testFile, initFile string, coverageInclude, coverageSources []string, functionNames map[string]map[int]string) ([]byte, error) {
+func buildShim(testFile, initFile string, coverageInclude, coverageSources []string, functionNames map[string]map[int]string, rewrittenSources map[string]string) ([]byte, error) {
 	if testFile == "" {
 		return nil, fmt.Errorf("test file path must not be empty")
 	}
@@ -178,6 +230,15 @@ func buildShim(testFile, initFile string, coverageInclude, coverageSources []str
 	// Emitted before the hook so the global is set when record_functions
 	// runs.
 	writeFunctionNames(&sb, functionNames)
+
+	// Rewritten source map for branch instrumentation: {path -> source}.
+	// The coverage hook installs a package.loaders shim that consults
+	// this global on every require() and loadfile() so a matching path
+	// gets its rewritten source (with _neospec_br(N) counter calls
+	// spliced in at every arm body) rather than the on-disk bytes.
+	// Emitted before the hook so the shim can register the global
+	// before any code under test is loaded.
+	writeRewrittenSources(&sb, rewrittenSources)
 
 	sb.Write(hook)
 	sb.WriteByte('\n')

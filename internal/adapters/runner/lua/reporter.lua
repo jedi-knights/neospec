@@ -109,7 +109,9 @@ local function json_value(v, depth)
 			for k in pairs(v) do
 				keys[#keys + 1] = k
 			end
-			table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+			table.sort(keys, function(a, b)
+				return tostring(a) < tostring(b)
+			end)
 			local parts = {}
 			for _, k in ipairs(keys) do
 				table.insert(parts, json_string(tostring(k)) .. ":" .. json_value(v[k], depth + 1))
@@ -169,6 +171,15 @@ function _neospec_report()
 			tests = _neospec_results or {},
 			coverage = coverage,
 		}
+
+		-- Branch instrumentation counters. Emitted only when the map is
+		-- non-empty so the Go consumer can distinguish "instrumentation
+		-- was active but nothing hit" (empty map) from "instrumentation
+		-- was off" (field absent). ApplyBranchCounters treats both cases
+		-- the same, but the distinction is useful for diagnostics.
+		if type(_neospec_br_counts) == "table" and next(_neospec_br_counts) ~= nil then
+			output.br_counts = _neospec_br_counts
+		end
 
 		-- Write to stdout. The Go consumer parses the entire stdout as JSON, so
 		-- stdout must contain only this line. Calls to print() from test files

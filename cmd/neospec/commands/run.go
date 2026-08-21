@@ -34,17 +34,18 @@ type runDeps struct {
 
 // runFlags holds values parsed from CLI flags for the run command.
 type runFlags struct {
-	configPath      string
-	neovimVersion   string
-	patterns        []string
-	coverageDir     string
-	formats         []string
-	threshold       float64
-	cacheDir        string
-	verbose         bool
-	initFile        string
-	coverageInclude []string
-	coverageSource  []string
+	configPath            string
+	neovimVersion         string
+	patterns              []string
+	coverageDir           string
+	formats               []string
+	threshold             float64
+	cacheDir              string
+	verbose               bool
+	branchInstrumentation bool
+	initFile              string
+	coverageInclude       []string
+	coverageSource        []string
 }
 
 // NewRunCmd builds the `neospec run` (and default) command.
@@ -72,6 +73,7 @@ func NewRunCmd() *cobra.Command {
 	f.StringVar(&flags.initFile, "init-file", "", "path to a Lua file executed before the coverage hook (e.g. tests/minimal_init.lua)")
 	f.StringArrayVar(&flags.coverageInclude, "coverage-include", nil, "restrict coverage to files whose path contains this substring (repeatable; e.g. lua/)")
 	f.StringArrayVar(&flags.coverageSource, "coverage-source", nil, "glob of source files to report even if no test loads them (repeatable; e.g. 'lua/**/*.lua')")
+	f.BoolVar(&flags.branchInstrumentation, "branch-instrumentation", false, "rewrite Lua source to record per-arm branch hits (source-derived BRDA gets exact taken counts; opt-in)")
 
 	return cmd
 }
@@ -110,6 +112,12 @@ func runTests(ctx context.Context, flags *runFlags, deps runDeps) error {
 			tr = runner.NewWithDefaultSandbox(nvimPath, cfg.Verbose, cfg.InitFile, cfg.CoverageInclude).
 				WithCoverageSources(cfg.CoverageSource).
 				WithFunctionNameResolver(cover.FunctionNameMap)
+			if cfg.BranchInstrumentation {
+				// Opt-in — rewrites Lua source before Neovim loads it so
+				// per-arm branch coverage becomes exact rather than
+				// line-hit-derived. Cost: parse + splice per source file.
+				tr = tr.(*runner.Runner).WithSourceRewriter(rewriteAllShim)
+			}
 		}
 	}
 	suite, cov, err := executeTests(ctx, cfg, tr)
@@ -125,6 +133,7 @@ func runTests(ctx context.Context, flags *runFlags, deps runDeps) error {
 	// records survive the merge; runs before emitReports so BRDA lands in
 	// LCOV output.
 	cover.PopulateBranches(cov)
+	applyBranchInstrumentation(tr, cov)
 
 	if err := emitReports(ctx, cfg, suite, cov); err != nil {
 		return err
@@ -301,4 +310,35 @@ func applyFlags(cfg *config.Config, flags *runFlags) {
 	if len(flags.coverageSource) > 0 {
 		cfg.CoverageSource = flags.coverageSource
 	}
+	if flags.branchInstrumentation {
+		cfg.BranchInstrumentation = true
+	}
+}
+
+// rewriteAllShim adapts cover.RewriteAll's typed return
+// ((map[string]string, []cover.Injection)) to the runner's opaque
+// SourceRewriteResolver signature ((map[string]string, any)). Kept in
+// this package rather than exposed from cover so the runner package
+// stays free of a cover import (cycle: cover already imports runner).
+func rewriteAllShim(paths []string) (map[string]string, any) {
+	sources, injections := cover.RewriteAll(paths)
+	return sources, injections
+}
+
+// applyBranchInstrumentation pulls the injection metadata off the
+// concrete Runner (if that's what tr is) and hands it to
+// cover.ApplyBranchCounters alongside the runtime counter map. No-op
+// when tr is a test fake, when instrumentation was off, or when the
+// runner produced no counters — the check chain short-circuits
+// naturally at each layer.
+func applyBranchInstrumentation(tr ports.TestRunner, cov *domain.CoverageData) {
+	realRunner, ok := tr.(*runner.Runner)
+	if !ok {
+		return
+	}
+	injs, ok := realRunner.Injections().([]cover.Injection)
+	if !ok {
+		return
+	}
+	cover.ApplyBranchCounters(cov, injs, cov.BranchCounters)
 }
