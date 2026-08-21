@@ -27,9 +27,15 @@ type coverallsPayload struct {
 // coverallsSource represents a single source file in the Coveralls format.
 // Coverage is a sparse array where index is line number - 1, value is hit count
 // or null for non-executable lines.
+//
+// Branches is a flat quadruple array — [line, block, branch, hits, ...] —
+// per Coveralls' spec. Emitted only when the file has source-derived
+// branch data so plain files render as line-only, matching the LCOV and
+// Cobertura convention of not synthesising empty branch structures.
 type coverallsSource struct {
 	Name     string `json:"name"`
 	Coverage []*int `json:"coverage"` // nil = not executable
+	Branches []int  `json:"branches,omitempty"`
 }
 
 func (c *Coveralls) Write(_ context.Context, w io.Writer, _ *domain.SuiteResult, cov *domain.CoverageData) error {
@@ -67,6 +73,7 @@ func (c *Coveralls) Write(_ context.Context, w io.Writer, _ *domain.SuiteResult,
 		payload.SourceFiles = append(payload.SourceFiles, coverallsSource{
 			Name:     file.Path,
 			Coverage: coverage,
+			Branches: buildCoverallsBranches(file.Branches),
 		})
 	}
 
@@ -76,4 +83,41 @@ func (c *Coveralls) Write(_ context.Context, w io.Writer, _ *domain.SuiteResult,
 	}
 	_, err = fmt.Fprintln(w, string(data))
 	return err
+}
+
+// buildCoverallsBranches converts source-derived BranchCoverage into the
+// flat [line, block, branch, hits, ...] quadruple array Coveralls expects.
+//
+// Block is fixed at 0 (neospec does not group branches into basic blocks),
+// branch is the arm index within the branch point (0, 1, ...), hits is
+// the arm's Taken count. Unknown arms (Taken == -1, from implicit
+// fall-through) are recorded as 0 hits — Coveralls has no representation
+// for "unknown", so an unscoreable arm is counted as a miss (same
+// aggregate treatment as LCOV's `-` and Cobertura's 0%).
+//
+// Output is sorted by (line, column) for deterministic bytes across runs.
+func buildCoverallsBranches(branches []domain.BranchCoverage) []int {
+	if len(branches) == 0 {
+		return nil
+	}
+	sorted := make([]domain.BranchCoverage, len(branches))
+	copy(sorted, branches)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].Line != sorted[j].Line {
+			return sorted[i].Line < sorted[j].Line
+		}
+		return sorted[i].Column < sorted[j].Column
+	})
+
+	out := make([]int, 0, 4*len(sorted)*2)
+	for _, b := range sorted {
+		for i, arm := range b.Arms {
+			hits := arm.Taken
+			if hits < 0 {
+				hits = 0
+			}
+			out = append(out, b.Line, 0, i, hits)
+		}
+	}
+	return out
 }
