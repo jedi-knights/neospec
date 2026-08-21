@@ -111,14 +111,18 @@ jobs:
       # the tarball asset name if upstream rearranges it) when we
       # want a newer runtime; no other CI-side changes needed. The
       # 0.10 line is what neospec's harness requires (uses vim.uv).
+      #
+      # Note: upstream renamed the tarball from nvim-linux64.tar.gz
+      # to nvim-linux-x86_64.tar.gz at v0.10.4. The extracted
+      # directory follows the same naming.
       - name: Install Neovim v0.10.4
         run: |
           set -euo pipefail
           curl -fL --retry 3 --retry-delay 2 \
-            https://github.com/neovim/neovim/releases/download/v0.10.4/nvim-linux64.tar.gz \
+            https://github.com/neovim/neovim/releases/download/v0.10.4/nvim-linux-x86_64.tar.gz \
             -o /tmp/nvim.tar.gz
           tar -xzf /tmp/nvim.tar.gz -C /tmp
-          echo "/tmp/nvim-linux64/bin" >> "$GITHUB_PATH"
+          echo "/tmp/nvim-linux-x86_64/bin" >> "$GITHUB_PATH"
 
       # Log the version so a future upstream break is obvious in the
       # run output rather than manifesting as a mysterious test
