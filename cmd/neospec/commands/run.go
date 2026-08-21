@@ -108,7 +108,8 @@ func runTests(ctx context.Context, flags *runFlags, deps runDeps) error {
 			tr = deps.runnerFactory(nvimPath, cfg.Verbose, cfg.InitFile, cfg.CoverageInclude)
 		} else {
 			tr = runner.NewWithDefaultSandbox(nvimPath, cfg.Verbose, cfg.InitFile, cfg.CoverageInclude).
-				WithCoverageSources(cfg.CoverageSource)
+				WithCoverageSources(cfg.CoverageSource).
+				WithFunctionNameResolver(cover.FunctionNameMap)
 		}
 	}
 	suite, cov, err := executeTests(ctx, cfg, tr)

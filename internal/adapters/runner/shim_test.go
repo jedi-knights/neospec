@@ -6,7 +6,7 @@ import (
 )
 
 func TestBuildShim_ContainsTestFile(t *testing.T) {
-	shim, err := buildShim("/path/to/my_spec.lua", "", nil, nil)
+	shim, err := buildShim("/path/to/my_spec.lua", "", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildShim() error: %v", err)
 	}
@@ -30,7 +30,7 @@ func TestBuildShim_ContainsTestFile(t *testing.T) {
 
 func TestBuildShim_EscapesBackslashes(t *testing.T) {
 	// Windows-style paths contain backslashes that must be escaped.
-	shim, err := buildShim(`C:\Users\test\spec.lua`, "", nil, nil)
+	shim, err := buildShim(`C:\Users\test\spec.lua`, "", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildShim() error: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestBuildShim_EscapesBackslashes(t *testing.T) {
 }
 
 func TestBuildShim_NonEmpty(t *testing.T) {
-	shim, err := buildShim("spec.lua", "", nil, nil)
+	shim, err := buildShim("spec.lua", "", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildShim() error: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestBuildShim_NonEmpty(t *testing.T) {
 }
 
 func TestBuildShim_WithInitFile(t *testing.T) {
-	shim, err := buildShim("/tests/my_spec.lua", "/tests/minimal_init.lua", nil, nil)
+	shim, err := buildShim("/tests/my_spec.lua", "/tests/minimal_init.lua", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildShim() error: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestBuildShim_WithInitFile(t *testing.T) {
 }
 
 func TestBuildShim_NoInitFile(t *testing.T) {
-	shim, err := buildShim("/tests/my_spec.lua", "", nil, nil)
+	shim, err := buildShim("/tests/my_spec.lua", "", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildShim() error: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestBuildShim_NoInitFile(t *testing.T) {
 // string escaping (newline, tab, carriage return) are escaped in the shim.
 // An unescaped newline inside a dofile("...") argument is a Lua syntax error.
 func TestBuildShim_EscapesNewlines(t *testing.T) {
-	shim, err := buildShim("/tmp/test\nfile.lua", "", nil, nil)
+	shim, err := buildShim("/tmp/test\nfile.lua", "", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildShim() error: %v", err)
 	}
@@ -517,7 +517,7 @@ func TestHarness_ElseBranchHasSetmetatable(t *testing.T) {
 // is a Lua runtime error ("cannot open : No such file or directory") rather
 // than a clear Go error pointing at the caller.
 func TestBuildShim_EmptyTestFile(t *testing.T) {
-	_, err := buildShim("", "", nil, nil)
+	_, err := buildShim("", "", nil, nil, nil)
 	if err == nil {
 		t.Error("buildShim(\"\", \"\") expected error for empty test file, got nil")
 	}
@@ -801,7 +801,7 @@ func TestBuildShim_RejectsNULByte(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := buildShim(tc.testFile, tc.initFile, nil, nil)
+			_, err := buildShim(tc.testFile, tc.initFile, nil, nil, nil)
 			if err == nil {
 				t.Errorf("buildShim(%q, %q) expected error for NUL byte, got nil", tc.testFile, tc.initFile)
 			}
@@ -813,7 +813,7 @@ func TestBuildShim_RejectsNULByte(t *testing.T) {
 // patterns are provided, buildShim emits a _neospec_coverage_include global
 // before the coverage hook so the hook can filter recorded paths.
 func TestBuildShim_CoverageIncludeAddsGlobal(t *testing.T) {
-	shim, err := buildShim("/path/to/spec.lua", "", []string{"lua/", "plugin/"}, nil)
+	shim, err := buildShim("/path/to/spec.lua", "", []string{"lua/", "plugin/"}, nil, nil)
 	if err != nil {
 		t.Fatalf("buildShim() error: %v", err)
 	}
@@ -842,7 +842,7 @@ func TestBuildShim_CoverageIncludeAddsGlobal(t *testing.T) {
 // intentionally absent so the hook falls through to its default behaviour of
 // recording all project sources without filtering.
 func TestBuildShim_NoCoverageInclude_NoPreamble(t *testing.T) {
-	shim, err := buildShim("/path/to/spec.lua", "", nil, nil)
+	shim, err := buildShim("/path/to/spec.lua", "", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildShim() error: %v", err)
 	}
@@ -867,5 +867,75 @@ func TestCoverageHook_ChecksIncludePatterns(t *testing.T) {
 	got := string(hook)
 	if !strings.Contains(got, "_neospec_coverage_include") {
 		t.Errorf("coverage_hook.lua does not check _neospec_coverage_include — include filtering is not implemented")
+	}
+}
+
+// TestBuildShim_EmitsFunctionNamesWhenPresent checks that a non-empty
+// function-name map produces a `_neospec_function_names = {...}` Lua
+// global with sorted paths and line numbers for deterministic output.
+func TestBuildShim_EmitsFunctionNamesWhenPresent(t *testing.T) {
+	names := map[string]map[int]string{
+		"/tests/b.lua": {42: "M.bar"},
+		"/tests/a.lua": {1: "foo", 15: "M.helper"},
+	}
+	shim, err := buildShim("/tests/spec.lua", "", nil, nil, names)
+	if err != nil {
+		t.Fatalf("buildShim: %v", err)
+	}
+	got := string(shim)
+	if !strings.Contains(got, "_neospec_function_names = {") {
+		t.Errorf("global assignment missing:\n%s", got)
+	}
+	// Path order must be sorted (a.lua before b.lua) for reproducibility.
+	aIdx := strings.Index(got, `"/tests/a.lua"`)
+	bIdx := strings.Index(got, `"/tests/b.lua"`)
+	if aIdx == -1 || bIdx == -1 || aIdx > bIdx {
+		t.Errorf("paths out of sorted order (a=%d b=%d):\n%s", aIdx, bIdx, got)
+	}
+	// Line numbers within a path must be sorted (1 before 15).
+	oneIdx := strings.Index(got, `[1]="foo"`)
+	fifteenIdx := strings.Index(got, `[15]="M.helper"`)
+	if oneIdx == -1 || fifteenIdx == -1 || oneIdx > fifteenIdx {
+		t.Errorf("lines out of sorted order (1=%d 15=%d):\n%s", oneIdx, fifteenIdx, got)
+	}
+}
+
+// TestBuildShim_NoFunctionNamesEmitsNothing pins the fallback path: when
+// no map is supplied, the shim carries no _neospec_function_names global
+// so coverage_hook.lua's NAME_PATTERNS regexes still run.
+func TestBuildShim_NoFunctionNamesEmitsNothing(t *testing.T) {
+	shim, err := buildShim("/tests/spec.lua", "", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("buildShim: %v", err)
+	}
+	got := string(shim)
+	if strings.Contains(got, "_neospec_function_names = {") {
+		t.Errorf("global should be absent for nil map:\n%s", got)
+	}
+	// Empty map (not nil) also emits nothing.
+	shim2, _ := buildShim("/tests/spec.lua", "", nil, nil, map[string]map[int]string{})
+	if strings.Contains(string(shim2), "_neospec_function_names = {") {
+		t.Errorf("global should be absent for empty map:\n%s", shim2)
+	}
+}
+
+// TestBuildShim_FunctionNamesEscapesSpecialChars pins that path and name
+// strings both go through luaEscape — a filename with a quote or newline
+// (rare but valid on some filesystems) would otherwise produce broken
+// Lua that LuaJIT rejects with an opaque parse error.
+func TestBuildShim_FunctionNamesEscapesSpecialChars(t *testing.T) {
+	names := map[string]map[int]string{
+		`/tests/weird"path.lua`: {1: `func"name`},
+	}
+	shim, err := buildShim("/tests/spec.lua", "", nil, nil, names)
+	if err != nil {
+		t.Fatalf("buildShim: %v", err)
+	}
+	got := string(shim)
+	if !strings.Contains(got, `\"path.lua`) {
+		t.Errorf("path double-quote not escaped:\n%s", got)
+	}
+	if !strings.Contains(got, `func\"name`) {
+		t.Errorf("name double-quote not escaped:\n%s", got)
 	}
 }

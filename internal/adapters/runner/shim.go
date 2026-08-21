@@ -3,8 +3,47 @@ package runner
 import (
 	"embed"
 	"fmt"
+	"sort"
 	"strings"
 )
+
+// writeFunctionNames emits `_neospec_function_names = { [path] = { [line]
+// = "name", ... }, ... }` when the map is non-empty. Paths and line
+// numbers are sorted so identical inputs always produce identical shim
+// bytes — reproducibility of the sandboxed run is a hard constraint,
+// and callers hash the shim to detect drift.
+//
+// Empty and nil inputs emit nothing so the coverage hook's fallback
+// (NAME_PATTERNS) still runs. A `_neospec_function_names = {}` global
+// would work but is noise.
+func writeFunctionNames(sb *strings.Builder, m map[string]map[int]string) {
+	if len(m) == 0 {
+		return
+	}
+	paths := make([]string, 0, len(m))
+	for p := range m {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+
+	sb.WriteString("_neospec_function_names = {\n")
+	for _, path := range paths {
+		fmt.Fprintf(sb, `  ["%s"] = {`, luaEscape(path))
+		lines := make([]int, 0, len(m[path]))
+		for ln := range m[path] {
+			lines = append(lines, ln)
+		}
+		sort.Ints(lines)
+		for i, ln := range lines {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			fmt.Fprintf(sb, `[%d]="%s"`, ln, luaEscape(m[path][ln]))
+		}
+		sb.WriteString("},\n")
+	}
+	sb.WriteString("}\n")
+}
 
 // luaEscape escapes a string for safe embedding in a Lua double-quoted string
 // literal. It handles backslash, double-quote, newline, carriage return, and
@@ -61,7 +100,7 @@ func ReporterSource() ([]byte, error) {
 // buildShim returns an error if either path contains a NUL byte. LuaJIT (used
 // by Neovim) truncates double-quoted strings at NUL, producing a silent
 // "file not found" rather than a clear diagnostic.
-func buildShim(testFile, initFile string, coverageInclude, coverageSources []string) ([]byte, error) {
+func buildShim(testFile, initFile string, coverageInclude, coverageSources []string, functionNames map[string]map[int]string) ([]byte, error) {
 	if testFile == "" {
 		return nil, fmt.Errorf("test file path must not be empty")
 	}
@@ -130,6 +169,15 @@ func buildShim(testFile, initFile string, coverageInclude, coverageSources []str
 		}
 		sb.WriteString("}\n")
 	}
+
+	// AST-recovered function-name map: {path -> {line -> name}}. The
+	// coverage hook consults this before falling back to its NAME_PATTERNS
+	// regexes, so a name recovered from the AST (which handles multi-line
+	// signatures, table-literal method fields, and other shapes the
+	// patterns miss) always wins over a source-line pattern match.
+	// Emitted before the hook so the global is set when record_functions
+	// runs.
+	writeFunctionNames(&sb, functionNames)
 
 	sb.Write(hook)
 	sb.WriteByte('\n')

@@ -206,10 +206,28 @@ local NAME_PATTERNS = {
 }
 
 --- Best-effort function name from the source line where it is defined.
+---
+--- Prefers the AST-recovered name emitted by the Go side as
+--- _neospec_function_names[path][lineno] (populated when the runner has
+--- a FunctionNameResolver — cover.FunctionNameMap in production). Falls
+--- back to source-line NAME_PATTERNS regex matching for any (path, line)
+--- the extractor did not cover — chiefly files outside the coverage
+--- source list, so no name was pre-computed.
+---
 --- @param src string|nil the source line
 --- @param lineno integer 1-based definition line
+--- @param path string|nil absolute file path for the AST lookup
 --- @return string
-local function function_name(src, lineno)
+local function function_name(src, lineno, path)
+	if type(_neospec_function_names) == "table" and type(path) == "string" then
+		local file_map = _neospec_function_names[path]
+		if type(file_map) == "table" then
+			local name = file_map[lineno]
+			if type(name) == "string" then
+				return name
+			end
+		end
+	end
 	if type(src) == "string" then
 		for _, pattern in ipairs(NAME_PATTERNS) do
 			local name = src:match(pattern)
@@ -299,7 +317,7 @@ local function record_functions(path, chunk, hits, util)
 		end
 
 		records[#records + 1] = {
-			name = function_name(src and src[proto.line] or nil, proto.line),
+			name = function_name(src and src[proto.line] or nil, proto.line, path),
 			line = proto.line,
 			count = count,
 		}
