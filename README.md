@@ -9,7 +9,7 @@
 [![GoReleaser](https://github.com/jedi-knights/neospec/actions/workflows/goreleaser.yml/badge.svg)](https://github.com/jedi-knights/neospec/actions/workflows/goreleaser.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Badge](https://github.com/jedi-knights/neospec/actions/workflows/badge.yaml/badge.svg)](https://github.com/jedi-knights/neospec/actions/workflows/badge.yaml)
-[![Coverage](https://img.shields.io/badge/Coverage-87.7%25-green)](https://jedi-knights.github.io/neospec/?v=26)
+[![Coverage](https://img.shields.io/badge/Coverage-87.9%25-green)](https://jedi-knights.github.io/neospec/?v=27)
 
 [Installation](#installation) · [Quickstart](#quickstart) · [Writing Tests](#writing-tests) · [Coverage](#coverage) · [GitHub Action](#github-action) · [Configuration](#configuration) · [Contributing](#contributing)
 
