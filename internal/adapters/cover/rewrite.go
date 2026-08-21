@@ -157,18 +157,40 @@ func (p *rewritePlanner) plan(node lua.Node) {
 	}
 }
 
-// planIf schedules injections for every explicit arm body: the initial
-// then, each elseif body, and the else body when present. Arm indices
-// match the domain BranchCoverage.Arms ordering — 0 = then,
-// 1..N = elseifs in source order, N+1 = else. Implicit fall-through
-// arms are Phase 3 and are not touched here.
+// planIf schedules injections for every explicit arm body, mapping each
+// to (BranchPosition, ArmIndex) so ApplyBranchCounters can find the
+// right domain BranchCoverage arm.
+//
+// The detector (branches.go) creates ONE 2-arm branch per decision — a
+// branch at the `if` position with arms [then, else-fallthrough], and
+// a separate branch at each `elseif` position with arms [then, else-
+// fallthrough]. So the injection at an elseif body must attribute to
+// arm 0 of the elseif's OWN branch, not to arm 1+i of some virtual
+// combined branch. An earlier version got this wrong (used 1+i) and
+// silently overwrote the elseif's fall-through arm with the elseif-
+// body's hit count — the runtime integration test that landed
+// alongside this rewrite is what surfaced it.
+//
+// The else body is arm 1 of the LAST decision branch (the last elseif,
+// or the if when no elseifs). PopulateBranches's line-hit derivation
+// would already give the right count for a distinct-line else clause;
+// the instrumentation counter overrides with the exact value, which
+// helps only for same-line else constructs but never disagrees with
+// the derived value on distinct-line ones.
+//
+// Implicit fall-through arms without any body (an `if` with no else)
+// stay unhandled here — that is Phase 3 territory.
 func (p *rewritePlanner) planIf(n *lua.IfStat) {
 	p.planArm(n.Position, 0, n.Then)
-	for i, ei := range n.ElseIfs {
-		p.planArm(ei.Position, 1+i, ei.Body)
+	for _, ei := range n.ElseIfs {
+		p.planArm(ei.Position, 0, ei.Body)
 	}
 	if n.Else != nil {
-		p.planArm(n.Position, 1+len(n.ElseIfs), n.Else)
+		branchPos := n.Position
+		if len(n.ElseIfs) > 0 {
+			branchPos = n.ElseIfs[len(n.ElseIfs)-1].Position
+		}
+		p.planArm(branchPos, 1, n.Else)
 	}
 }
 
