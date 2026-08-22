@@ -60,6 +60,13 @@ type ShimOpts struct {
 	// so a raw pattern like "lua/" matches any path with that substring
 	// anywhere. Matches the run command's semantics exactly.
 	CoverageInclude []string
+	// FunctionNames is an AST-recovered (path, line) → name map emitted as
+	// `_neospec_function_names = {...}` before the hook. The coverage hook
+	// looks up function names from this global rather than pattern-matching
+	// source (NAME_PATTERNS was deleted in #43). Cover mode auto-populates
+	// from cover.FunctionNameMap over the resolved coverage sources; any
+	// (path, line) not present renders as "anonymous@N" in the report.
+	FunctionNames map[string]map[int]string
 }
 
 // BuildShim constructs the Lua entry-point file for a cover-mode invocation.
@@ -112,6 +119,14 @@ func BuildShim(opts ShimOpts) ([]byte, error) {
 	// filter already excludes.
 	writeCoverageInclude(&sb, opts.CoverageInclude)
 
+	// Emit the AST-recovered function-name map before the hook loads
+	// so record_functions (called during _neospec_coverage_finalize)
+	// sees real names for every function defined in a coverage_source
+	// file. Anything not in the map — anonymous callbacks, or files
+	// outside the source list — renders as "anonymous@N" per the
+	// design decided in #43 when the NAME_PATTERNS fallback was retired.
+	writeFunctionNames(&sb, opts.FunctionNames)
+
 	// Emit the resolved coverage-source list before the hook loads so
 	// the finalizer sees it during _neospec_coverage_finalize and adds
 	// zero-count entries for files no wrapped test touched. Without
@@ -133,6 +148,47 @@ func BuildShim(opts ShimOpts) ([]byte, error) {
 	sb.WriteString(`vim.cmd("qa!")` + "\n")
 
 	return []byte(sb.String()), nil
+}
+
+// writeFunctionNames emits `_neospec_function_names = { [path] = { [line]
+// = "name", ... }, ... }` when the map is non-empty. Paths and line
+// numbers are sorted so identical inputs produce identical shim bytes
+// — same determinism promise every other cover-mode shim emission holds.
+//
+// Duplicated from runner/shim.go rather than exported: this concern is
+// per-shim (cover mode and run mode each emit their own preamble), and
+// the runner-side helper is unexported for the same reason. Following
+// the existing convention set by writeCoverageSources / writeCoverageInclude.
+//
+// Empty and nil inputs emit nothing so the coverage hook's fallback
+// (label every function "anonymous@N") runs unchanged.
+func writeFunctionNames(sb *strings.Builder, m map[string]map[int]string) {
+	if len(m) == 0 {
+		return
+	}
+	paths := make([]string, 0, len(m))
+	for p := range m {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+
+	sb.WriteString("_neospec_function_names = {\n")
+	for _, path := range paths {
+		fmt.Fprintf(sb, `  ["%s"] = {`, luaEscape(path))
+		lines := make([]int, 0, len(m[path]))
+		for ln := range m[path] {
+			lines = append(lines, ln)
+		}
+		sort.Ints(lines)
+		for i, ln := range lines {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			fmt.Fprintf(sb, `[%d]="%s"`, ln, luaEscape(m[path][ln]))
+		}
+		sb.WriteString("},\n")
+	}
+	sb.WriteString("}\n")
 }
 
 // writeCoverageInclude emits the `_neospec_coverage_include = {...}`
