@@ -2,7 +2,7 @@
 
 # neospec
 
-**One binary that runs your Neovim plugin's Lua tests in CI and tells you what's covered.**
+**One binary that runs Lua tests for Neovim plugins and distributions in CI — and tells you what's covered.**
 
 [![CI](https://github.com/jedi-knights/neospec/actions/workflows/ci.yml/badge.svg)](https://github.com/jedi-knights/neospec/actions/workflows/ci.yml)
 [![Release](https://github.com/jedi-knights/neospec/actions/workflows/release.yml/badge.svg)](https://github.com/jedi-knights/neospec/actions/workflows/release.yml)
@@ -20,6 +20,7 @@
 - [Overview](#overview)
 - [Which mode do I want?](#which-mode-do-i-want)
 - [Features](#features)
+- [Coverage — the feature Neovim test frameworks don't provide](#coverage--the-feature-neovim-test-frameworks-dont-provide)
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Usage](#usage)
@@ -42,27 +43,29 @@
 
 ## Overview
 
-If you write Neovim plugins in Lua, your CI job probably looks like this today:
+**neospec is a CI tool for anything Lua that runs inside Neovim.** Plugin authors, maintainers of distributions like [LazyVim](https://github.com/LazyVim/LazyVim) / [NvChad](https://github.com/NvChad/NvChad) / [AstroNvim](https://github.com/AstroNvim/AstroNvim) / [kickstart.nvim](https://github.com/nvim-lua/kickstart.nvim), and anyone shipping a Lua config or module they want tests around — this tool is for you. It is a single Go binary that downloads a pinned Neovim, runs your Lua tests in an isolated sandbox on every push, and produces coverage reports in the formats your CI dashboard already speaks (LCOV, Cobertura, Coveralls, JUnit, console).
+
+**The problem it solves.** Testing Lua-for-Neovim in CI is a puzzle every project re-solves from scratch:
 
 1. Download a Neovim tarball with `curl`.
-2. Extract it into a directory.
-3. Prepend that directory to `PATH`.
-4. `git clone` [`plenary.nvim`](https://github.com/nvim-lua/plenary.nvim) into a specific spot on `runtimepath` so `PlenaryBustedDirectory` will work.
-5. Write a `minimal_init.vim` that loads plenary before your tests.
-6. Run `nvim --headless -c "PlenaryBustedDirectory tests/" -c "qa!"` and hope the exit code means what you think it means.
-7. Ship without a coverage badge, because measuring Lua coverage inside `nvim --headless` was never in scope for any of the tools above.
+2. Extract it. Prepend to `PATH`.
+3. `git clone` [plenary.nvim](https://github.com/nvim-lua/plenary.nvim) into a specific spot on `runtimepath` so `PlenaryBustedDirectory` will work.
+4. Write a `minimal_init.vim` that loads plenary before your tests.
+5. Run `nvim --headless -c "PlenaryBustedDirectory tests/" -c "qa!"` and hope the exit code means what you think it means.
+6. Ship without a coverage badge, because measuring Lua coverage inside `nvim --headless` was never in scope for any of the tools above.
 
-Every Neovim plugin repo re-solves that same puzzle. It works, it's fragile, and it silently drifts every time upstream Neovim reorganizes a release asset (they renamed `nvim-linux64.tar.gz` to `nvim-linux-x86_64.tar.gz` at v0.10.4 — did your CI notice?).
+Every Neovim project — whether it is one plugin or a whole distribution — re-solves that same puzzle. It works, it's fragile, and it silently drifts every time upstream Neovim reorganizes a release asset (they renamed `nvim-linux64.tar.gz` to `nvim-linux-x86_64.tar.gz` at v0.10.4 — did your CI notice?).
 
-**neospec is one binary that does the whole puzzle.** You either point it at your existing test files and use it as your test runner (`neospec run`), or you keep your existing runner and let neospec add coverage on top (`neospec cover`). Either way you get:
+**What neospec does well.** One binary that does the whole puzzle. You either point it at your existing test files and use it as your test runner (`neospec run`), or you keep your existing runner and let neospec add coverage on top (`neospec cover`). Either way you get:
 
-- A pinned, verified Neovim install — no `curl | tar` in your workflow.
-- A clean, sandboxed `XDG` environment for every run so your tests cannot read or corrupt your real Neovim config.
-- Line and branch coverage collected via Lua's `debug.sethook` (no source changes required from you).
-- Reports in the formats your CI already understands: **LCOV, Cobertura XML, JUnit XML, Coveralls JSON, and a color console summary.**
-- A GitHub Action wrapper so opting in is a single `uses:` line.
+- **A pinned, verified Neovim install** — no `curl | tar` in your workflow. Ask for `stable`, `nightly`, or a specific tag; neospec downloads it once and caches it.
+- **A clean, sandboxed `XDG` environment** for every run so tests cannot read or corrupt anyone's real Neovim config — the same isolation matters for a one-file plugin and a distribution with hundreds of loaded modules.
+- **Line and branch coverage** collected via Lua's `debug.sethook`, with no source changes required from you.
+- **Reports in the formats your CI already understands:** LCOV, Cobertura XML, JUnit XML, Coveralls JSON, and a color console summary. Wire them into Codecov, Coveralls, GitHub PR annotations, or your dashboard of choice.
+- **A Neovim-version matrix mode** (`neospec exec`) so distributions can prove they still boot cleanly on stable *and* nightly before every release.
+- **A GitHub Action wrapper** so opting in is a single `uses:` line — no runner installation, no plenary clone, no `minimal_init` boilerplate for the common case.
 
-The tool is intentionally not a "Neovim testing ecosystem." It does not mock LSP, it does not fake treesitter, it does not snapshot floating windows — plenary and [mini.test](https://github.com/echasnovski/mini.test) already do those things well inside the Neovim runtime, and neospec has no interest in competing with them there. **neospec's job is the CI plumbing around your tests, not the tests themselves.**
+**What it deliberately isn't.** neospec is not a "Neovim testing ecosystem." It does not mock LSP, fake treesitter, or snapshot floating windows — plenary and [mini.test](https://github.com/echasnovski/mini.test) already do those things well inside the Neovim runtime, and neospec has no interest in competing with them there. **neospec's job is the CI plumbing around your tests, not the tests themselves.** If you already use plenary or mini.test, `neospec cover` wraps them and adds coverage without touching how your tests run.
 
 ## Which mode do I want?
 
@@ -74,7 +77,7 @@ If you already have tests, pick based on your current setup:
 | You use plenary.busted heavily (spies, stubs, `assert.same`) and don't want to change | `neospec cover --runner=plenary-busted` | Keeps your runner, just adds coverage reports |
 | You use `mini.test` | `neospec cover --runner=mini-test` | Same idea — your runner stays, coverage appears |
 | You have a `make test` target you don't want to touch | `neospec cover --runner=external -- make test` | Coverage instrumentation via env vars, you drive the command |
-| You want to sanity-check your plugin against multiple Neovim versions | `neospec exec --versions=stable,nightly,v0.10.4 -- <cmd>` | Runs the same command once per version, aggregates the results |
+| You want to sanity-check your plugin or distribution against multiple Neovim versions | `neospec exec --versions=stable,nightly,v0.10.4 -- <cmd>` | Runs the same command once per version, aggregates the results |
 | You have no tests yet and you're starting from scratch | `neospec run` with test files under `test/**/*_spec.lua` | Simplest possible surface — one binary, one command, no bootstrap files |
 
 If you're not sure, start with `neospec run`. If it can't run your tests unchanged, fall back to `neospec cover`.
@@ -92,6 +95,36 @@ If you're not sure, start with `neospec run`. If it can't run your tests unchang
 - **Companion mode** (`neospec cover`) wraps plenary.busted, mini.test, or your own command — adds coverage without replacing the runner.
 - **Matrix mode** (`neospec exec`) runs any command across multiple Neovim versions.
 - **GitHub Action** shipped in this repo — `uses: jedi-knights/neospec@v0` and you're done.
+
+## Coverage — the feature Neovim test frameworks don't provide
+
+**plenary.busted has no coverage story at all, and mini.test's is limited to partial line coverage.** Neither emits LCOV, Cobertura, Coveralls, or JUnit; neither produces branch or function coverage; neither works with the coverage services (Codecov, Coveralls) and badges your CI dashboard already speaks. `neospec run` fills that gap natively, and `neospec cover` closes it for teams who stay on plenary or mini.test. If your reason for looking at neospec is "I want a coverage badge next to my `PlenaryBustedDirectory` build," this section is why the tool exists.
+
+The mechanism is Lua's built-in `debug.sethook(hook, "l")` — the hook fires on every executed line, so **no source changes, no build step, no annotations**. What neospec adds on top:
+
+- **Line coverage.** Every executed line is recorded and rolled up into a percentage. LCOV `DA:` records; Cobertura `hits`; Coveralls per-line array.
+- **Branch coverage.** LCOV `BRDA/BRF/BRH`, Cobertura per-line `condition-coverage` + `<condition/>` elements + `branch-rate` roll-ups, Coveralls flat `branches` quadruple array. Branch points (`if`/`elseif`/`else`, `while`, `repeat`, numeric and generic `for` loops) are located by parsing the Lua source via [go-lua-parser](https://github.com/jedi-knights/go-lua-parser) — a companion library published standalone under MIT so any Go tool that reasons about Lua source can consume it. Short-circuit `and`/`or` and implicit-arm shapes are honestly reported as "unknown" rather than falsely scored; source-rewriting support for those is a planned extension.
+- **Function coverage.** LCOV `FN/FNDA/FNF/FNH`. Function names are recovered from the AST (`M.setup`, `parser.tokenize`, etc.) rather than falling back to `anonymous@42`, so a coverage viewer that lists functions actually says what the reader needs to see.
+- **Exact per-arm branch counts (opt-in).** `--branch-instrumentation` rewrites Lua sources ahead of time to inject `_neospec_br(N)` counters at every branch arm's body. Without it, per-arm counts are derived from line hits — honest but conservative: a same-line `if x then A end` reports its arm as "unknown" (`-` in LCOV, `0%` in Cobertura) rather than falsely 100%. Cost: parse + splice per source file at run start (milliseconds), plus one function call per arm execution at test time.
+
+**Report formats.** Any of:
+
+| Format | Best consumed by |
+|---|---|
+| `console` | Humans reading CI logs. |
+| `lcov` | Codecov, Coveralls, `genhtml`, most badge tools. |
+| `cobertura` | Azure DevOps, Jenkins, GitLab, SonarQube. |
+| `coveralls` | Coveralls.io direct upload. |
+| `junit` | GitHub Actions test-result annotations, most CI dashboards. Test-results only — not emitted in `cover` mode, since cover doesn't own the wrapped runner's pass/fail parsing. |
+
+Enable as many as you want in one run: `neospec run --format=console --format=lcov --format=cobertura`.
+
+**Scoping.** Two flags stop the two ways a Lua coverage report can lie to you:
+
+- `--coverage-include=lua/` — record only files whose absolute path contains this substring. Use it to drop Neovim's own runtime files out of your report so you're measuring your code, not the editor's.
+- `--coverage-source='lua/**/*.lua'` — force these files into the report even if no test loads them. Without it, an entire module that nobody tests silently disappears from the denominator and your percentage looks better than it is.
+
+Everything in this section applies to both `neospec run` and `neospec cover` — same collection, same reports, same formats. The difference is who executes the tests: `neospec run` uses neospec's own plenary.busted-compatible harness, while `neospec cover` hands execution to your existing plenary / mini.test / external runner and just wraps the hook around it.
 
 ## Requirements
 
@@ -229,7 +262,7 @@ For `plenary-busted` and `mini-test` submodes:
 
 1. Downloads the Neovim version you asked for.
 2. Generates a Lua shim that installs the coverage hook and wires a `VimLeavePre` autocmd to serialize collected coverage to a file on exit.
-3. Invokes the wrapped runner (`plenary.test_harness.test_directory` or `MiniTest.run`) from inside the shim, using **your** existing `--minimal-init` file to bootstrap the runtimepath.
+3. Invokes the wrapped runner from inside the shim, using **your** existing `--minimal-init` file to bootstrap the runtimepath. For plenary, that's `require("plenary.busted").run(spec)` per glob-discovered `*_spec.lua` (in-process, so the coverage hook sees every line); for mini.test, that's `MiniTest.run` against the same glob.
 4. Reads the serialized coverage back and emits reports in your chosen formats.
 
 For `external` submode:
@@ -293,7 +326,7 @@ For `external` mode, everything after `--` is the command neospec runs, e.g. `ne
 
 ### `neospec exec` — run any command across many Neovim versions
 
-**Why you'd use it.** You want to verify that your plugin still loads (or your tests still pass) on multiple Neovim versions — for example `stable` and `nightly` before you push a release. This is not a testing feature per se; it's a version-matrix wrapper for any command.
+**Why you'd use it.** You want to verify that your project still loads (or your tests still pass) on multiple Neovim versions — a plugin against `stable` and `nightly` before a release, or a distribution against every version its user base has pinned. This is not a testing feature per se; it's a version-matrix wrapper for any command.
 
 **What it does.**
 
@@ -371,9 +404,9 @@ Neither subcommand takes flags.
 
 Below are three progressively more elaborate real-world setups.
 
-### 1. The simplest possible CI: your plugin has tests, you want coverage
+### 1. The simplest possible CI: your project has tests, you want coverage
 
-You already have `test/parser_spec.lua`. You want a green check on every PR and a coverage percentage you can display. In your repo:
+You already have `test/parser_spec.lua` — a plugin, a distribution's core module, whatever. You want a green check on every PR and a coverage percentage you can display. In your repo:
 
 ```yaml
 # .github/workflows/test.yml
@@ -643,13 +676,7 @@ Every `NEOSPEC_*` variable overrides the same-named `neospec.toml` key.
 | Coveralls JSON | `coveralls` | `coverage/coveralls.json` | Coveralls.io direct upload. |
 | JUnit XML | `junit` | `coverage/junit.xml` | GitHub Actions test-result annotations, Jenkins, most CI dashboards. Not supported in `cover` mode. |
 
-Multiple formats can be enabled at once — `neospec run --format=console --format=lcov --format=junit` writes to all three.
-
-### Branch and function coverage
-
-- Line coverage: `debug.sethook` records every executed Lua line. No source changes required.
-- Branch coverage: neospec parses your Lua source, locates every branch decision, and reports per-arm hits. By default those counts are line-hit-derived (same line = shared count, so a `if x then A end` on one line reports its arm as "unknown" rather than falsely 100%). Turn on `--branch-instrumentation` to rewrite sources ahead of time and get exact per-arm counts. The cost is one parse + splice per source file at run start, plus one function call per arm execution at test time.
-- Function coverage: neospec walks the same AST to recover real function names (`M.setup`, `parser.tokenize`, etc.) so LCOV's `FN/FNDA` records show meaningful names instead of `anonymous@42`.
+Multiple formats can be enabled at once — `neospec run --format=console --format=lcov --format=junit` writes to all three. See the [Coverage section](#coverage--the-feature-neovim-test-frameworks-dont-provide) for the line / branch / function-coverage details and the trade-off between line-hit-derived branch counts and opt-in source-rewriting instrumentation.
 
 ## Neovim version management
 
@@ -771,5 +798,5 @@ Contributions are welcome. Please open an issue before starting significant work
 ---
 
 <div align="center">
-Made for the Neovim plugin community by <a href="https://github.com/jedi-knights">Jedi Knights</a>
+Made for the Neovim plugin and distribution community by <a href="https://github.com/jedi-knights">Jedi Knights</a>
 </div>
