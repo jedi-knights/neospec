@@ -50,6 +50,16 @@ type ShimOpts struct {
 	// files no wrapped test touched — flattering the percentage on any run
 	// whose test suite doesn't reach every module.
 	CoverageSources []string
+	// CoverageInclude is a substring filter emitted as
+	// `_neospec_coverage_include = {...}` before the hook. When non-empty,
+	// the coverage hook records only files whose absolute path contains at
+	// least one of these substrings — the typical usage is scoping to the
+	// plugin's own source tree and excluding Neovim's runtime files.
+	//
+	// Substrings, not globs: the hook does plain path:find(pattern, 1, true)
+	// so a raw pattern like "lua/" matches any path with that substring
+	// anywhere. Matches the run command's semantics exactly.
+	CoverageInclude []string
 }
 
 // BuildShim constructs the Lua entry-point file for a cover-mode invocation.
@@ -95,6 +105,13 @@ func BuildShim(opts ShimOpts) ([]byte, error) {
 	var sb strings.Builder
 	sb.Grow(len(hook) + len(reporter) + 2048)
 
+	// Emit the coverage-include substring filter before the hook loads
+	// so is_project_source consults it at every line event. Without
+	// this, cover mode records every file the wrapped runner touched
+	// including Neovim's own runtime — noise the run command's
+	// filter already excludes.
+	writeCoverageInclude(&sb, opts.CoverageInclude)
+
 	// Emit the resolved coverage-source list before the hook loads so
 	// the finalizer sees it during _neospec_coverage_finalize and adds
 	// zero-count entries for files no wrapped test touched. Without
@@ -116,6 +133,29 @@ func BuildShim(opts ShimOpts) ([]byte, error) {
 	sb.WriteString(`vim.cmd("qa!")` + "\n")
 
 	return []byte(sb.String()), nil
+}
+
+// writeCoverageInclude emits the `_neospec_coverage_include = {...}`
+// Lua global that the coverage hook consults from is_project_source at
+// every line event. Substrings are emitted in the user's given order
+// (no sort) because the hook short-circuits on the first match — reorder
+// changes the fast path but never the result set. luaEscape'd for path
+// substrings that legitimately contain special chars.
+//
+// Empty and nil input emit nothing so the coverage hook's default
+// (record every file) runs unchanged.
+func writeCoverageInclude(sb *strings.Builder, patterns []string) {
+	if len(patterns) == 0 {
+		return
+	}
+	sb.WriteString("_neospec_coverage_include = {")
+	for i, p := range patterns {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		fmt.Fprintf(sb, `"%s"`, luaEscape(p))
+	}
+	sb.WriteString("}\n")
 }
 
 // writeCoverageSources emits the `_neospec_coverage_sources = {...}`

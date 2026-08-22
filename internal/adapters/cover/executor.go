@@ -64,6 +64,14 @@ type Opts struct {
 	// same resolution the run command uses so callers get consistent
 	// semantics across both entry points.
 	CoverageSources []string
+	// CoverageInclude is an optional list of path substrings (same
+	// semantics as the run command's --coverage-include). When non-empty,
+	// the coverage hook records only files whose absolute path contains
+	// at least one of the listed substrings — scopes the report to the
+	// plugin's own source tree and excludes Neovim's runtime files.
+	//
+	// Passed to the shim verbatim; no resolution or expansion happens.
+	CoverageInclude []string
 }
 
 // Run instruments the wrapped runner with coverage collection and returns
@@ -118,6 +126,7 @@ func (e *Executor) runShim(ctx context.Context, sb ports.Sandbox, nvimPath strin
 		Dir:             opts.Dir,
 		OutputFile:      outputFile,
 		CoverageSources: resolvedSources,
+		CoverageInclude: opts.CoverageInclude,
 	})
 	if err != nil {
 		return nil, err
