@@ -206,6 +206,28 @@ func coveragePaths(cov *domain.CoverageData) []string {
 	return out
 }
 
+// TestBranchInstrumentation_TrueE2E_CoverMode was drafted alongside
+// this PR to verify cover.Executor against real Neovim + real
+// plenary-busted, matching the run-mode E2E in #41. First CI run
+// exposed that plenary.test_harness.test_directory spawns a child
+// nvim per spec file — the parent's coverage_hook + rewritten-source
+// map never propagate to the child, so instrumentation silently
+// produces no counters and the wrapped runner exits 1 with only
+// "Starting..." on stderr.
+//
+// This is a real gap in the shipped cover-mode plenary integration
+// (not a bug this PR introduced), and closing it needs either an
+// in-process runner path via require("plenary.busted").run(spec)
+// per file, or a plenary-side change to inherit hooks into children.
+// Either way it's a substantial-enough change that doesn't belong
+// here.
+//
+// The infrastructure this PR does ship — plenary installed in the
+// E2E job, untruncated stderr in cover.Executor errors — is what
+// the follow-up test needs. Its helper types (realNvimProvider,
+// realE2ERunner) live in the follow-up too so this PR doesn't ship
+// dead code.
+
 // TestBranchInstrumentation_TrueE2E_DofileShim verifies that files
 // loaded via dofile (which bypasses package.loaders entirely) also
 // get their rewritten source. Without the loadfile/dofile monkey-
