@@ -39,22 +39,29 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Generate Coverage Report
+      # Two-format setup: gcov2lcov produces the LCOV that genhtml renders
+      # (yoda-style HTML report — a generic, dependency-free page), and
+      # gocover-cobertura produces the Cobertura XML that the coverage-badge
+      # action below consumes. Both convert from Go's native coverage.out
+      # so the numbers are guaranteed to match.
+      - name: Generate coverage reports
         run: |
+          go install github.com/jandelgado/gcov2lcov@latest
           go install github.com/boumenot/gocover-cobertura@v1.4.0
           go test -race -count=1 -coverprofile=coverage.out ./...
+          mkdir -p coverage
+          gcov2lcov -infile=coverage.out -outfile=coverage/lcov.info
           gocover-cobertura < coverage.out | grep -v '<!DOCTYPE' > coverage.xml
         shell: bash
 
-      - name: Generate HTML Coverage Report
+      # HTML report via lcov's genhtml — same generator yoda.nvim uses.
+      # Standard Linux tool from the lcov package, no .NET runtime or
+      # dotnet tool install involved. Ignores source-missing errors so a
+      # generated file that no longer exists on disk doesn't fail the job.
+      - name: Generate HTML coverage report
         run: |
-          dotnet tool install --global dotnet-reportgenerator-globaltool
-          export PATH="$HOME/.dotnet/tools:$PATH"
-          reportgenerator \
-            -reports:coverage.xml \
-            -targetdir:htmlcov \
-            -reporttypes:Html \
-            -title:"Neospec Coverage"
+          sudo apt-get install -y --quiet lcov
+          genhtml coverage/lcov.info -o htmlcov/ --quiet --ignore-errors source --title "Neospec Coverage"
         shell: bash
 
       - name: Update Coverage Badge
