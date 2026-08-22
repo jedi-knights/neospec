@@ -1038,6 +1038,29 @@ func TestCoverageHook_HasBranchCounterGlobal(t *testing.T) {
 	}
 }
 
+// TestCoverageHook_HasLoadfileShim pins that coverage_hook.lua
+// monkey-patches both loadfile and dofile. Without these patches,
+// modules loaded via dofile / loadfile bypass the package.loaders
+// shim entirely — the on-disk (unrewritten) source runs and no
+// counter fires. Silent failure mode; only end-to-end tests catch
+// its removal at runtime, so the pin here shortens the feedback loop.
+func TestCoverageHook_HasLoadfileShim(t *testing.T) {
+	hook, err := luaFS.ReadFile("lua/coverage_hook.lua")
+	if err != nil {
+		t.Fatalf("reading coverage_hook.lua: %v", err)
+	}
+	got := string(hook)
+	if !strings.Contains(got, "loadfile = function") {
+		t.Error("coverage_hook.lua missing loadfile monkey-patch")
+	}
+	if !strings.Contains(got, "dofile = function") {
+		t.Error("coverage_hook.lua missing dofile monkey-patch (dofile bypasses loadfile in stock Lua)")
+	}
+	if !strings.Contains(got, "original_loadfile") {
+		t.Error("coverage_hook.lua missing original_loadfile capture — the fallback for unmapped paths")
+	}
+}
+
 // TestReporter_EmitsBranchCounts pins that reporter.lua emits the
 // br_counts field. Without it, the runner's parseOutput would never
 // see the counter map and attribution would be a no-op even when

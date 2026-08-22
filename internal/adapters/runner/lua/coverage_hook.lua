@@ -72,6 +72,81 @@ if type(_neospec_rewritten_sources) == "table" and next(_neospec_rewritten_sourc
 		end
 		table.insert(loaders, 1, rewritten_loader)
 	end
+
+	-- Monkey-patch loadfile and dofile so files loaded outside
+	-- require() also get their rewritten source. The package.loaders
+	-- shim above only intercepts require; dofile and loadfile bypass
+	-- it entirely because they are C functions that call C-level
+	-- luaL_loadfile directly, not the Lua-level loadfile global.
+	-- Without these patches, any module loaded via `dofile` or
+	-- `loadfile` reads the on-disk (unrewritten) source and no
+	-- _neospec_br(N) counter fires — silently defeating instrumentation
+	-- for that file.
+	--
+	-- Two-key map lookup: user code may pass either an absolute path
+	-- (matches map keys directly) or a relative path. Relative paths
+	-- get normalised to absolute via vim.fn.fnamemodify when we're
+	-- running under Neovim, which is neospec's target — fallback to
+	-- the raw argument keeps other Lua runtimes working.
+	local function resolve_abs(filename)
+		if type(vim) == "table" and type(vim.fn) == "table" and type(vim.fn.fnamemodify) == "function" then
+			return vim.fn.fnamemodify(filename, ":p")
+		end
+		return filename
+	end
+
+	local function rewritten_load(filename, mode)
+		local src = _neospec_rewritten_sources[filename]
+		if src == nil then
+			src = _neospec_rewritten_sources[resolve_abs(filename)]
+		end
+		if src == nil then
+			return nil
+		end
+		return load(src, "@" .. filename, mode or "t")
+	end
+
+	local original_loadfile = loadfile
+	-- Signature covers Lua 5.1 (filename), 5.2+/LuaJIT (filename, mode,
+	-- env). Extra args pass through to the original when we don't
+	-- intercept.
+	loadfile = function(filename, mode, env)
+		if filename == nil then
+			-- No filename → stdin. Neospec never rewrites stdin; pass
+			-- through so `lua < file.lua` semantics are preserved.
+			return original_loadfile(filename, mode, env)
+		end
+		local chunk, err = rewritten_load(filename, mode)
+		if chunk ~= nil then
+			return chunk, nil
+		end
+		if err ~= nil then
+			-- rewritten_load returned an error string from load() —
+			-- the map had this file but its rewritten source failed
+			-- to compile. Surface the error rather than silently
+			-- falling back, which would mask the rewriter bug.
+			return nil, err
+		end
+		return original_loadfile(filename, mode, env)
+	end
+
+	-- dofile is a C function in stock Lua/LuaJIT that calls C-level
+	-- luaL_loadfile directly. Replacing the Lua-level `loadfile`
+	-- global does NOT affect dofile — dofile still bypasses. Override
+	-- explicitly by re-implementing dofile in terms of the (now
+	-- patched) loadfile. Preserves stdin-read semantics for no-arg
+	-- dofile() by delegating to the original in that case.
+	local original_dofile = dofile
+	dofile = function(filename)
+		if filename == nil then
+			return original_dofile(filename)
+		end
+		local chunk, err = loadfile(filename)
+		if chunk == nil then
+			error(err, 2)
+		end
+		return chunk()
+	end
 end
 
 -- _neospec_is_test_source returns true for source files that belong to the

@@ -205,3 +205,102 @@ func coveragePaths(cov *domain.CoverageData) []string {
 	}
 	return out
 }
+
+// TestBranchInstrumentation_TrueE2E_DofileShim verifies that files
+// loaded via dofile (which bypasses package.loaders entirely) also
+// get their rewritten source. Without the loadfile/dofile monkey-
+// patch in coverage_hook.lua this test's counters would be empty:
+// dofile calls C-level luaL_loadfile which reads on-disk bytes and
+// never consults _neospec_rewritten_sources.
+func TestBranchInstrumentation_TrueE2E_DofileShim(t *testing.T) {
+	if os.Getenv("NEOSPEC_E2E") == "" {
+		t.Skip("NEOSPEC_E2E env var not set — skipping true-e2e test")
+	}
+	nvimPath, err := exec.LookPath("nvim")
+	if err != nil {
+		t.Skipf("nvim not on PATH: %v", err)
+	}
+
+	dir := t.TempDir()
+
+	// Same source shape as the require-path test.
+	srcFile := writeE2EFile(t, dir, "mod.lua", `local M = {}
+function M.classify(x)
+  if x > 10 then
+    return "high"
+  elseif x > 5 then
+    return "mid"
+  else
+    return "low"
+  end
+end
+return M
+`)
+
+	// Load via dofile — the whole point of this test. Without the
+	// shim, dofile reads mod.lua verbatim from disk, no counter fires,
+	// BranchCounts stays empty. With the shim, dofile returns the
+	// rewritten source and counters fire normally.
+	testContent := fmt.Sprintf(`local M = dofile(%q)
+describe("classify (dofile path)", function()
+  it("high", function()
+    assert.equals("high", M.classify(20))
+    assert.equals("high", M.classify(15))
+  end)
+  it("mid", function()
+    assert.equals("mid", M.classify(7))
+  end)
+end)
+`, srcFile)
+	testFile := writeE2EFile(t, dir, "test/mod_dofile_spec.lua", testContent)
+
+	r := runner.NewWithDefaultSandbox(nvimPath, false, "", nil).
+		WithCoverageSources([]string{srcFile}).
+		WithSourceRewriter(func(paths []string) (map[string]string, any) {
+			sources, injections := cover.RewriteAll(paths)
+			return sources, injections
+		})
+
+	suite, cov, err := r.Run(context.Background(), []string{testFile})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(suite.Tests) != 2 {
+		t.Fatalf("expected 2 tests, got %d — was rewritten source valid?\ntests: %+v",
+			len(suite.Tests), suite.Tests)
+	}
+	for _, tr := range suite.Tests {
+		if tr.Status != domain.StatusPass {
+			t.Errorf("test %s: status=%v error=%s", tr.Name, tr.Status, tr.Error)
+		}
+	}
+
+	injections, ok := r.Injections().([]cover.Injection)
+	if !ok || len(injections) != 3 {
+		t.Fatalf("Injections = %v (%T), want []cover.Injection of len 3",
+			r.Injections(), r.Injections())
+	}
+	counts := r.BranchCounts()
+	if len(counts) == 0 {
+		t.Fatal("BranchCounts empty — dofile shim did not serve rewritten source; instrumentation silently bypassed")
+	}
+	assertCount(t, counts, injections[0].BranchID, 2, "high (then arm, dofile-loaded)")
+	assertCount(t, counts, injections[1].BranchID, 1, "mid (elseif arm, dofile-loaded)")
+
+	cover.PopulateBranches(cov)
+	cover.ApplyBranchCounters(cov, injections, cov.BranchCounters)
+
+	file := cov.FileByPath(srcFile)
+	if file == nil {
+		t.Fatalf("source file not in coverage: paths=%v", coveragePaths(cov))
+	}
+	ifBranch := branchAtLine(t, file, 3)
+	elseifBranch := branchAtLine(t, file, 5)
+	if got := ifBranch.Arms[0].Taken; got != 2 {
+		t.Errorf("if arm 0 (high) Taken = %d, want 2", got)
+	}
+	if got := elseifBranch.Arms[0].Taken; got != 1 {
+		t.Errorf("elseif arm 0 (mid) Taken = %d, want 1", got)
+	}
+}
