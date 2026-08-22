@@ -130,6 +130,20 @@ jobs:
       - name: Verify Neovim
         run: nvim --version
 
+      # plenary.nvim is required by the cover-mode E2E test
+      # (TestBranchInstrumentation_TrueE2E_CoverMode) — it drives the
+      # RunnerPlenaryBusted code path against real plenary. Cloned to
+      # /tmp/plenary.nvim which is the default the test looks for;
+      # override via NEOSPEC_E2E_PLENARY if a different location is
+      # ever needed. --depth 1 keeps the download fast; if a specific
+      # plenary revision becomes load-bearing, pin via commit SHA
+      # here rather than upstream tag (plenary tags rarely).
+      - name: Install plenary.nvim
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/nvim-lua/plenary.nvim.git /tmp/plenary.nvim
+          (cd /tmp/plenary.nvim && git log -1 --oneline)
+
       # Every TestBranchInstrumentation_TrueE2E* test — currently the
       # require-loaded and dofile-loaded variants. Prefix pattern
       # picks up future E2E siblings automatically (short-circuit,
