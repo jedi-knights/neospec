@@ -197,8 +197,14 @@ func (e *Executor) runShim(ctx context.Context, sb ports.Sandbox, nvimPath strin
 	// The runner's exit code carries semantic meaning — plenary and mini.test
 	// use non-zero exit to signal test failure. We surface a runner error but
 	// still return any coverage data that made it to disk before the exit.
+	//
+	// Stderr is included in full: users debugging a failed cover-mode run
+	// need the wrapped runner's own error output to diagnose, and truncating
+	// forced them to re-run with -verbose (which not everyone knows about).
+	// The full output goes to their terminal, not a log file, so verbosity
+	// is a UX benefit here, not a leak.
 	if runErr != nil {
-		return cov, fmt.Errorf("wrapped runner exited with error: %w (stderr: %.500s)", runErr, stderr)
+		return cov, fmt.Errorf("wrapped runner exited with error: %w\nstderr:\n%s", runErr, stderr)
 	}
 	return cov, parseErr
 }
