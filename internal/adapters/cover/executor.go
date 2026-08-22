@@ -72,6 +72,18 @@ type Opts struct {
 	//
 	// Passed to the shim verbatim; no resolution or expansion happens.
 	CoverageInclude []string
+	// BranchInstrumentation opts into source-rewriting branch coverage
+	// for the wrapped-runner invocation. When true, Executor.Run calls
+	// cover.RewriteAll over the resolved coverage sources and emits the
+	// rewritten bytes to the shim; the coverage_hook's loader shims
+	// serve them so _neospec_br(N) counters fire at each arm body.
+	// Same semantics as the run command's --branch-instrumentation.
+	//
+	// Off by default. When on but no CoverageSources are configured,
+	// nothing gets rewritten (no files to rewrite) and the run behaves
+	// as if the flag were off — the derived BRDA still fires via
+	// PopulateBranches on whatever coverage the hook recorded.
+	BranchInstrumentation bool
 }
 
 // Run instruments the wrapped runner with coverage collection and returns
@@ -129,13 +141,25 @@ func (e *Executor) runShim(ctx context.Context, sb ports.Sandbox, nvimPath strin
 	// were configured; BuildShim emits nothing in that case.
 	functionNames := FunctionNameMap(resolvedSources)
 
+	// Rewrite sources for branch instrumentation when opted-in. Two
+	// artefacts come out: the rewritten-bytes map handed to the shim
+	// so counters fire at runtime, and the injections list kept local
+	// so ApplyBranchCounters can attribute the counter values back to
+	// BranchArm entries after the run.
+	var rewrittenSources map[string]string
+	var injections []Injection
+	if opts.BranchInstrumentation {
+		rewrittenSources, injections = RewriteAll(resolvedSources)
+	}
+
 	shim, err := BuildShim(ShimOpts{
-		Mode:            opts.Mode,
-		Dir:             opts.Dir,
-		OutputFile:      outputFile,
-		CoverageSources: resolvedSources,
-		CoverageInclude: opts.CoverageInclude,
-		FunctionNames:   functionNames,
+		Mode:             opts.Mode,
+		Dir:              opts.Dir,
+		OutputFile:       outputFile,
+		CoverageSources:  resolvedSources,
+		CoverageInclude:  opts.CoverageInclude,
+		FunctionNames:    functionNames,
+		RewrittenSources: rewrittenSources,
 	})
 	if err != nil {
 		return nil, err
@@ -156,6 +180,19 @@ func (e *Executor) runShim(ctx context.Context, sb ports.Sandbox, nvimPath strin
 
 	_, stderr, runErr := e.cmdRun.Run(ctx, sb.Env(), nvimPath, args...)
 	cov, parseErr := readCoverageFile(outputFile)
+
+	// Populate source-derived BranchCoverage from the parsed AST +
+	// line hits (line-hit-derived proxy per arm), then, if
+	// instrumentation ran, overwrite arm counts with the exact runtime
+	// values that _neospec_br(N) recorded. Same two-step attribution
+	// the run command applies via applyBranchInstrumentation; done
+	// here rather than in the CLI because cover.Executor lives in the
+	// cover package and can call both primitives directly without the
+	// cycle-avoidance dance run mode needs.
+	PopulateBranches(cov)
+	if len(injections) > 0 && cov != nil {
+		ApplyBranchCounters(cov, injections, cov.BranchCounters)
+	}
 
 	// The runner's exit code carries semantic meaning — plenary and mini.test
 	// use non-zero exit to signal test failure. We surface a runner error but

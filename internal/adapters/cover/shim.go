@@ -67,6 +67,13 @@ type ShimOpts struct {
 	// from cover.FunctionNameMap over the resolved coverage sources; any
 	// (path, line) not present renders as "anonymous@N" in the report.
 	FunctionNames map[string]map[int]string
+	// RewrittenSources is a {path -> rewritten_source} map emitted as
+	// `_neospec_rewritten_sources = {...}` before the hook. When set, the
+	// coverage_hook's package.loaders / loadfile / dofile shims serve the
+	// rewritten bytes so `_neospec_br(N)` counter calls fire at each arm
+	// body. Enables exact per-arm BRDA in wrapped-runner reports instead
+	// of the line-hit-derived approximation PopulateBranches produces.
+	RewrittenSources map[string]string
 }
 
 // BuildShim constructs the Lua entry-point file for a cover-mode invocation.
@@ -127,6 +134,15 @@ func BuildShim(opts ShimOpts) ([]byte, error) {
 	// design decided in #43 when the NAME_PATTERNS fallback was retired.
 	writeFunctionNames(&sb, opts.FunctionNames)
 
+	// Emit the rewritten-source map before the hook loads so
+	// coverage_hook's package.loaders / loadfile / dofile shims see
+	// the global when they install themselves. Any require / dofile /
+	// loadfile of a path in the map serves the rewritten bytes;
+	// unmapped paths pass through to Neovim's default loader
+	// unchanged. Enables exact per-arm BRDA in cover-mode reports
+	// (same feature that landed in run mode via #38).
+	writeRewrittenSources(&sb, opts.RewrittenSources)
+
 	// Emit the resolved coverage-source list before the hook loads so
 	// the finalizer sees it during _neospec_coverage_finalize and adds
 	// zero-count entries for files no wrapped test touched. Without
@@ -148,6 +164,63 @@ func BuildShim(opts ShimOpts) ([]byte, error) {
 	sb.WriteString(`vim.cmd("qa!")` + "\n")
 
 	return []byte(sb.String()), nil
+}
+
+// writeRewrittenSources emits `_neospec_rewritten_sources = { [path] =
+// [==[ ... ]==], ... }` when the map is non-empty. Values are embedded
+// as long-bracket strings with the smallest level that doesn't collide
+// with any `]=*]` sequence inside the source — safer than double-
+// quoted escaping for large Lua bodies that may contain arbitrary
+// control chars inside string literals.
+//
+// Duplicated from runner/shim.go rather than exported: this concern is
+// per-shim (cover mode and run mode each emit their own preamble), and
+// the runner-side helper is unexported for the same reason. Following
+// the existing convention set by writeCoverageSources / writeCoverageInclude /
+// writeFunctionNames.
+//
+// Empty and nil inputs emit nothing so the coverage hook's loader
+// shims never install themselves, and every file loads through
+// Neovim's default loader unchanged.
+func writeRewrittenSources(sb *strings.Builder, m map[string]string) {
+	if len(m) == 0 {
+		return
+	}
+	paths := make([]string, 0, len(m))
+	for p := range m {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+
+	sb.WriteString("_neospec_rewritten_sources = {\n")
+	for _, path := range paths {
+		src := m[path]
+		level := longBracketLevel(src)
+		eq := strings.Repeat("=", level)
+		// Newline right after the opening bracket is eaten by Lua's
+		// long-bracket rules; add one so any leading whitespace in
+		// src is preserved.
+		fmt.Fprintf(sb, "  [%q] = [%s[\n%s]%s],\n", path, eq, src, eq)
+	}
+	sb.WriteString("}\n")
+}
+
+// longBracketLevel returns the smallest N such that `]` followed by N
+// `=` signs followed by `]` does not appear in src. That marker (level
+// N) is then safe to use as the closing delimiter of a Lua long-bracket
+// string containing src.
+//
+// Bounded at 32 defensively — Lua source cannot contain arbitrarily
+// long `]=*]` runs syntactically outside string literals, but a
+// pathological input should not spin.
+func longBracketLevel(src string) int {
+	for level := 0; level < 32; level++ {
+		marker := "]" + strings.Repeat("=", level) + "]"
+		if !strings.Contains(src, marker) {
+			return level
+		}
+	}
+	return 32
 }
 
 // writeFunctionNames emits `_neospec_function_names = { [path] = { [line]

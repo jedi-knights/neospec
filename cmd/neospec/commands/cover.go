@@ -34,18 +34,19 @@ type coverExecutor interface {
 
 // coverFlags holds values parsed from CLI flags for the cover command.
 type coverFlags struct {
-	configPath      string
-	runner          string
-	dir             string
-	minimalInit     string
-	neovimVersion   string
-	formats         []string
-	coverageDir     string
-	coverageSource  []string
-	coverageInclude []string
-	threshold       float64
-	cacheDir        string
-	verbose         bool
+	configPath            string
+	runner                string
+	dir                   string
+	minimalInit           string
+	neovimVersion         string
+	formats               []string
+	coverageDir           string
+	coverageSource        []string
+	coverageInclude       []string
+	branchInstrumentation bool
+	threshold             float64
+	cacheDir              string
+	verbose               bool
 }
 
 // NewCoverCmd builds the `neospec cover` command. cover wraps an existing
@@ -96,6 +97,7 @@ for loading the hook via 'nvim -c "luafile $NEOSPEC_COVER_HOOK"' or equivalent.`
 	f.StringVar(&flags.coverageDir, "coverage-dir", "", "directory for coverage report files")
 	f.StringArrayVar(&flags.coverageSource, "coverage-source", nil, "glob of source files to report even if no wrapped test loads them (repeatable; e.g. 'lua/**/*.lua')")
 	f.StringArrayVar(&flags.coverageInclude, "coverage-include", nil, "restrict coverage to files whose path contains this substring (repeatable; e.g. lua/)")
+	f.BoolVar(&flags.branchInstrumentation, "branch-instrumentation", false, "rewrite Lua source to record per-arm branch hits (source-derived BRDA gets exact taken counts; opt-in)")
 	f.Float64Var(&flags.threshold, "threshold", 0, "minimum coverage percentage (0 = disabled)")
 	f.StringVar(&flags.cacheDir, "cache-dir", "", "directory for cached Neovim binaries")
 	f.BoolVarP(&flags.verbose, "verbose", "v", false, "verbose output")
@@ -202,14 +204,15 @@ func buildCoverOpts(flags *coverFlags, args []string, cfg config.Config) (cover.
 	}
 
 	return cover.Opts{
-		Mode:            mode,
-		Version:         version,
-		Dir:             flags.dir,
-		MinimalInit:     flags.minimalInit,
-		Command:         args,
-		Verbose:         cfg.Verbose,
-		CoverageSources: flags.coverageSource,
-		CoverageInclude: flags.coverageInclude,
+		Mode:                  mode,
+		Version:               version,
+		Dir:                   flags.dir,
+		MinimalInit:           flags.minimalInit,
+		Command:               args,
+		Verbose:               cfg.Verbose,
+		CoverageSources:       flags.coverageSource,
+		CoverageInclude:       flags.coverageInclude,
+		BranchInstrumentation: flags.branchInstrumentation,
 	}, nil
 }
 
