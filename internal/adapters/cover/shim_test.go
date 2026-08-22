@@ -16,16 +16,32 @@ func TestBuildShim_PlenaryBusted(t *testing.T) {
 	}
 	s := string(shim)
 	for _, want := range []string{
-		"debug.sethook",                   // hook installed
-		"_neospec_report",                 // reporter loaded
-		"VimLeavePre",                     // exit-time autocmd
-		`io.open("/tmp/out.json"`,         // output file wired
-		"plenary.test_harness",            // plenary invoked
-		`harness.test_directory("tests/"`, // dir escaped and inlined
-		`vim.cmd("qa!")`,                  // explicit exit
+		"debug.sethook",           // hook installed
+		"_neospec_report",         // reporter loaded
+		"VimLeavePre",             // exit-time autocmd
+		`io.open("/tmp/out.json"`, // output file wired
+		"plenary.busted",          // in-process busted, not test_harness (which spawns children)
+		`busted.run`,              // per-spec in-process invocation
+		`vim.fn.glob("tests/`,     // spec discovery from Dir
+		`vim.cmd("qa!")`,          // explicit exit
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("shim missing %q\n---\n%s", want, s)
+		}
+	}
+	// The child-spawning APIs must NOT be invoked — that's the whole point
+	// of this shape. If either shows up, the coverage hook installed in
+	// the parent won't propagate to the spawned child and the reporter
+	// will serialize an empty coverage map. Substrings are the invocation
+	// forms (require path + literal cmd name) rather than bare names so
+	// they don't match documentation strings elsewhere in the shim.
+	for _, forbidden := range []string{
+		`require("plenary.test_harness")`,
+		`vim.cmd("PlenaryBustedDirectory`,
+		`vim.cmd("PlenaryBustedFile`, // also spawns a child, per test_harness.lua
+	} {
+		if strings.Contains(s, forbidden) {
+			t.Errorf("shim contains forbidden child-spawning API %q\n---\n%s", forbidden, s)
 		}
 	}
 }

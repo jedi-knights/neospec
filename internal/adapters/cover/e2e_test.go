@@ -22,7 +22,9 @@ import (
 
 	"github.com/jedi-knights/neospec/internal/adapters/cover"
 	"github.com/jedi-knights/neospec/internal/adapters/runner"
+	"github.com/jedi-knights/neospec/internal/adapters/sandbox"
 	"github.com/jedi-knights/neospec/internal/domain"
+	"github.com/jedi-knights/neospec/internal/ports"
 )
 
 // TestBranchInstrumentation_TrueE2E runs a real Neovim against a
@@ -206,27 +208,140 @@ func coveragePaths(cov *domain.CoverageData) []string {
 	return out
 }
 
-// TestBranchInstrumentation_TrueE2E_CoverMode was drafted alongside
-// this PR to verify cover.Executor against real Neovim + real
-// plenary-busted, matching the run-mode E2E in #41. First CI run
-// exposed that plenary.test_harness.test_directory spawns a child
-// nvim per spec file — the parent's coverage_hook + rewritten-source
-// map never propagate to the child, so instrumentation silently
-// produces no counters and the wrapped runner exits 1 with only
-// "Starting..." on stderr.
+// TestBranchInstrumentation_TrueE2E_CoverMode verifies cover.Executor
+// against real Neovim + real plenary-busted. The mirror of
+// TestBranchInstrumentation_TrueE2E for cover mode, so run-mode and
+// cover-mode pipelines are both exercised by the same E2E job.
 //
-// This is a real gap in the shipped cover-mode plenary integration
-// (not a bug this PR introduced), and closing it needs either an
-// in-process runner path via require("plenary.busted").run(spec)
-// per file, or a plenary-side change to inherit hooks into children.
-// Either way it's a substantial-enough change that doesn't belong
-// here.
+// Cover-mode plenary now runs in-process via PlenaryBustedFile per
+// glob-discovered spec (see runnerInvocation in shim.go). The
+// coverage hook installed in the parent Neovim sees every line the
+// specs execute; if that regressed to plenary.test_harness.test_directory
+// (which spawns child nvims per spec) the assertions below would fail
+// because the parent hook doesn't propagate.
 //
-// The infrastructure this PR does ship — plenary installed in the
-// E2E job, untruncated stderr in cover.Executor errors — is what
-// the follow-up test needs. Its helper types (realNvimProvider,
-// realE2ERunner) live in the follow-up too so this PR doesn't ship
-// dead code.
+// Requires plenary.nvim at /tmp/plenary.nvim (the CI default; override
+// with NEOSPEC_E2E_PLENARY). Skipped unless NEOSPEC_E2E is set and
+// nvim is on PATH.
+func TestBranchInstrumentation_TrueE2E_CoverMode(t *testing.T) {
+	if os.Getenv("NEOSPEC_E2E") == "" {
+		t.Skip("NEOSPEC_E2E env var not set — skipping true-e2e test")
+	}
+	nvimPath, err := exec.LookPath("nvim")
+	if err != nil {
+		t.Skipf("nvim not on PATH: %v", err)
+	}
+	plenaryPath := os.Getenv("NEOSPEC_E2E_PLENARY")
+	if plenaryPath == "" {
+		plenaryPath = "/tmp/plenary.nvim"
+	}
+	if _, err := os.Stat(plenaryPath); err != nil {
+		t.Skipf("plenary.nvim not at %s (set NEOSPEC_E2E_PLENARY to override): %v", plenaryPath, err)
+	}
+
+	dir := t.TempDir()
+
+	srcFile := writeE2EFile(t, dir, "mod.lua", `local M = {}
+function M.classify(x)
+  if x > 10 then
+    return "high"
+  elseif x > 5 then
+    return "mid"
+  else
+    return "low"
+  end
+end
+return M
+`)
+
+	// Spec loads the module via require through package.path. The
+	// spec directory sits under `dir` so cover.Executor's glob
+	// (`<Dir>/**/*_spec.lua`) discovers it via `Dir: dir`.
+	testContent := fmt.Sprintf(`package.path = %q .. package.path
+local M = require("mod")
+describe("classify (cover-mode)", function()
+  it("high", function()
+    assert.equals("high", M.classify(20))
+    assert.equals("high", M.classify(15))
+  end)
+  it("mid", function()
+    assert.equals("mid", M.classify(7))
+  end)
+end)
+`, dir+"/?.lua;")
+	writeE2EFile(t, dir, "test/mod_spec.lua", testContent)
+
+	// minimal_init prepends plenary to runtimepath — matches the
+	// convention every plenary.busted CI recipe uses, and is exactly
+	// what a cover-mode user would already have in tests/minimal_init.vim.
+	initFile := writeE2EFile(t, dir, "minimal_init.lua", fmt.Sprintf(`vim.opt.rtp:prepend(%q)`, plenaryPath))
+
+	exec := cover.NewExecutor(
+		e2eNvimProvider{path: nvimPath},
+		sandbox.NewFactory(),
+		e2eCmdRun{},
+		domain.Platform{OS: "linux", Arch: "amd64"},
+	)
+
+	cov, err := exec.Run(context.Background(), cover.Opts{
+		Mode:                  cover.RunnerPlenaryBusted,
+		Dir:                   dir,
+		MinimalInit:           initFile,
+		CoverageSources:       []string{srcFile},
+		BranchInstrumentation: true,
+	})
+	if err != nil {
+		t.Fatalf("Executor.Run: %v", err)
+	}
+	if cov == nil {
+		t.Fatal("coverage data is nil — did the reporter fire before nvim exit?")
+	}
+
+	file := cov.FileByPath(srcFile)
+	if file == nil {
+		t.Fatalf("source file not in coverage: paths=%v", coveragePaths(cov))
+	}
+	if len(file.Branches) != 2 {
+		t.Fatalf("expected 2 branches on mod.lua, got %d", len(file.Branches))
+	}
+
+	// If plenary had spawned a child nvim, the parent hook would see
+	// no lines and Arms[0].Taken would be 0. The whole point of the
+	// in-process shape is that these numbers reflect what the specs
+	// actually did.
+	ifBranch := branchAtLine(t, file, 3)
+	elseifBranch := branchAtLine(t, file, 5)
+	if got := ifBranch.Arms[0].Taken; got != 2 {
+		t.Errorf("if arm 0 (high) Taken = %d, want 2 — cover-mode plenary may have regressed to child-spawning", got)
+	}
+	if got := elseifBranch.Arms[0].Taken; got != 1 {
+		t.Errorf("elseif arm 0 (mid) Taken = %d, want 1", got)
+	}
+}
+
+// e2eNvimProvider hands back a pre-existing nvim path (the one the CI
+// job installed) instead of downloading. Lets the cover.Executor run
+// against a real nvim without paying the download cost or needing a
+// network for the test.
+type e2eNvimProvider struct{ path string }
+
+func (p e2eNvimProvider) Ensure(_ context.Context, _ domain.Version, _ domain.Platform) (string, error) {
+	return p.path, nil
+}
+
+// e2eCmdRun bridges the production runner.RunCommand to the
+// ports.CommandRunner interface cover.Executor expects. Matches
+// realRunner in cmd/neospec/commands/exec.go — kept local so the
+// test file doesn't reach across the cmd boundary.
+type e2eCmdRun struct{}
+
+func (e2eCmdRun) Run(ctx context.Context, env []string, name string, args ...string) ([]byte, []byte, error) {
+	return runner.RunCommand(ctx, env, name, args...)
+}
+
+// Compile-time check that our fakes satisfy the ports the executor consumes.
+var _ ports.NeovimProvider = e2eNvimProvider{}
+var _ ports.CommandRunner = e2eCmdRun{}
 
 // TestBranchInstrumentation_TrueE2E_DofileShim verifies that files
 // loaded via dofile (which bypasses package.loaders entirely) also
