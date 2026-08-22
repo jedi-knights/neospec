@@ -151,10 +151,22 @@ function _neospec_report()
 		-- Skip entries with no line data: an empty Lua table encodes as "[]" (a JSON
 		-- array) rather than "{}" (a JSON object), which would confuse consumers that
 		-- expect a map. Files with zero recorded hits carry no useful information.
+		--
+		-- Force lines to encode as a JSON object regardless of key density by
+		-- rebuilding the table with string keys. json_value's array-detection
+		-- fires when keys happen to be contiguous integers 1..N (common for
+		-- files whose executable lines start at line 1), producing
+		-- "[hits1, hits2, ...]" that the runner's map[string]int decoder can't
+		-- consume. Stringifying keys up-front removes the ambiguity at the
+		-- source and matches the wire shape the runner already expects.
 		local coverage = {}
 		for path, lines in pairs(_neospec_coverage or {}) do
 			if next(lines) ~= nil then
-				local entry = { path = path, lines = lines }
+				local string_keyed_lines = {}
+				for line, count in pairs(lines) do
+					string_keyed_lines[tostring(line)] = count
+				end
+				local entry = { path = path, lines = string_keyed_lines }
 				-- Function records are optional: a file with no functions (pure
 				-- data or config) simply omits the key rather than encoding an
 				-- empty Lua table, which would serialise as "[]" and read as an
@@ -177,8 +189,19 @@ function _neospec_report()
 		-- was active but nothing hit" (empty map) from "instrumentation
 		-- was off" (field absent). ApplyBranchCounters treats both cases
 		-- the same, but the distinction is useful for diagnostics.
+		--
+		-- Stringify the BranchID keys for the same reason as coverage
+		-- lines: BranchIDs are assigned 1..N by RewriteAll, so a run
+		-- that fires every counter would produce keys 1..N — indistinguishable
+		-- from an array to json_value. String keys pin the wire shape as
+		-- a JSON object so the runner's map[int]int decoder always sees
+		-- the expected map form.
 		if type(_neospec_br_counts) == "table" and next(_neospec_br_counts) ~= nil then
-			output.br_counts = _neospec_br_counts
+			local string_counts = {}
+			for id, hits in pairs(_neospec_br_counts) do
+				string_counts[tostring(id)] = hits
+			end
+			output.br_counts = string_counts
 		end
 
 		-- Write to stdout. The Go consumer parses the entire stdout as JSON, so
