@@ -53,6 +53,17 @@ type Opts struct {
 	Command []string
 	// Verbose enables nvim's -V3 diagnostic output. Off by default.
 	Verbose bool
+	// CoverageSources is an optional list of glob patterns (same syntax as
+	// the run command's --coverage-source) naming source files that should
+	// appear in the coverage report even when the wrapped runner's tests
+	// don't load them. Without this, cover mode silently omits any module
+	// no test touched — flattering the reported percentage on projects
+	// whose test suite has holes.
+	//
+	// Globs are resolved once, in Executor.Run, via runner.Discover — the
+	// same resolution the run command uses so callers get consistent
+	// semantics across both entry points.
+	CoverageSources []string
 }
 
 // Run instruments the wrapped runner with coverage collection and returns
@@ -96,7 +107,18 @@ func (e *Executor) Run(ctx context.Context, opts Opts) (*domain.CoverageData, er
 // that installs the coverage hook + reporter, invoke the wrapped runner from
 // inside the shim, and read the coverage JSON the reporter writes to disk.
 func (e *Executor) runShim(ctx context.Context, sb ports.Sandbox, nvimPath string, opts Opts, outputFile string) (*domain.CoverageData, error) {
-	shim, err := BuildShim(ShimOpts{Mode: opts.Mode, Dir: opts.Dir, OutputFile: outputFile})
+	// Resolve --coverage-source globs once, before shim generation, so
+	// the shim carries a stable resolved-path list. A resolution failure
+	// degrades to "no zero-count entries" rather than aborting — same
+	// policy the run command uses (coverage is a report, not a gate).
+	resolvedSources := resolveGlobs(ctx, opts.CoverageSources)
+
+	shim, err := BuildShim(ShimOpts{
+		Mode:            opts.Mode,
+		Dir:             opts.Dir,
+		OutputFile:      outputFile,
+		CoverageSources: resolvedSources,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -172,6 +194,33 @@ func writeExternalHook(dir string) (string, error) {
 // readCoverageFile reads the JSON output file the reporter (or the user's
 // external command) wrote and unmarshals it into CoverageData via the
 // runner's public ParseReporterOutput.
+// resolveGlobs expands each pattern via runner.Discover and returns the
+// absolute paths. On any resolution error, returns nil — the caller
+// treats that as "no coverage-source list configured" so the run
+// continues without zero-count entries. Same failure policy the run
+// command uses (coverage is a report, not a gate).
+func resolveGlobs(ctx context.Context, patterns []string) []string {
+	if len(patterns) == 0 {
+		return nil
+	}
+	found, err := runner.Discover(ctx, patterns)
+	if err != nil {
+		return nil
+	}
+	abs := make([]string, 0, len(found))
+	for _, p := range found {
+		a, aerr := filepath.Abs(p)
+		if aerr != nil {
+			continue
+		}
+		abs = append(abs, a)
+	}
+	if len(abs) == 0 {
+		return nil
+	}
+	return abs
+}
+
 func readCoverageFile(path string) (*domain.CoverageData, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

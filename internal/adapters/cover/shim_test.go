@@ -116,3 +116,73 @@ func TestLuaEscape(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildShim_EmitsCoverageSourcesWhenPresent pins that the resolved
+// coverage-source list lands as a Lua global sorted deterministically.
+// The coverage_hook's finalizer keys on this global to add zero-count
+// entries for files no wrapped test loaded.
+func TestBuildShim_EmitsCoverageSourcesWhenPresent(t *testing.T) {
+	shim, err := BuildShim(ShimOpts{
+		Mode:            RunnerPlenaryBusted,
+		Dir:             "tests/",
+		OutputFile:      "/tmp/out.json",
+		CoverageSources: []string{"/src/b.lua", "/src/a.lua"},
+	})
+	if err != nil {
+		t.Fatalf("BuildShim: %v", err)
+	}
+	got := string(shim)
+	if !strings.Contains(got, "_neospec_coverage_sources = {") {
+		t.Errorf("global assignment missing:\n%s", got)
+	}
+	// Sorted: a.lua must appear before b.lua for reproducibility.
+	aIdx := strings.Index(got, `"/src/a.lua"`)
+	bIdx := strings.Index(got, `"/src/b.lua"`)
+	if aIdx == -1 || bIdx == -1 || aIdx > bIdx {
+		t.Errorf("paths out of sorted order (a=%d b=%d):\n%s", aIdx, bIdx, got)
+	}
+	// Emitted BEFORE the coverage hook loads so _neospec_coverage_finalize
+	// picks it up. debug.sethook is inside the hook, so the sources
+	// global must precede it.
+	sourcesIdx := strings.Index(got, "_neospec_coverage_sources = {")
+	hookIdx := strings.Index(got, "debug.sethook")
+	if sourcesIdx == -1 || hookIdx == -1 || sourcesIdx > hookIdx {
+		t.Errorf("sources global must be emitted before the hook (sources=%d hook=%d)", sourcesIdx, hookIdx)
+	}
+}
+
+// TestBuildShim_NoCoverageSourcesEmitsNothing pins the fallback path:
+// nil / empty input produces no global so the hook's default behavior
+// (record only files a test loaded) runs unchanged.
+func TestBuildShim_NoCoverageSourcesEmitsNothing(t *testing.T) {
+	shim, err := BuildShim(ShimOpts{
+		Mode:       RunnerPlenaryBusted,
+		Dir:        "tests/",
+		OutputFile: "/tmp/out.json",
+	})
+	if err != nil {
+		t.Fatalf("BuildShim: %v", err)
+	}
+	if strings.Contains(string(shim), "_neospec_coverage_sources = {") {
+		t.Errorf("global should be absent for nil sources:\n%s", shim)
+	}
+}
+
+// TestBuildShim_CoverageSourcesEscapesSpecialChars pins that path
+// strings go through luaEscape — a filename with a quote or newline
+// would otherwise produce broken Lua that LuaJIT rejects with an
+// opaque parse error.
+func TestBuildShim_CoverageSourcesEscapesSpecialChars(t *testing.T) {
+	shim, err := BuildShim(ShimOpts{
+		Mode:            RunnerPlenaryBusted,
+		Dir:             "tests/",
+		OutputFile:      "/tmp/out.json",
+		CoverageSources: []string{`/src/weird"path.lua`},
+	})
+	if err != nil {
+		t.Fatalf("BuildShim: %v", err)
+	}
+	if !strings.Contains(string(shim), `\"path.lua`) {
+		t.Errorf("path double-quote not escaped:\n%s", shim)
+	}
+}

@@ -302,3 +302,48 @@ func TestExecutor_Run_ExternalWritesHookFile(t *testing.T) {
 		t.Errorf("hook file not created at %s: %v", hookPath, err)
 	}
 }
+
+// TestResolveGlobs_Empty pins the nil/empty short-circuit — no
+// filesystem walk, no allocation, no error.
+func TestResolveGlobs_Empty(t *testing.T) {
+	if got := resolveGlobs(context.Background(), nil); got != nil {
+		t.Errorf("resolveGlobs(nil) = %v, want nil", got)
+	}
+	if got := resolveGlobs(context.Background(), []string{}); got != nil {
+		t.Errorf("resolveGlobs(empty) = %v, want nil", got)
+	}
+}
+
+// TestResolveGlobs_ResolvesRealFiles happy path — writes a couple of
+// files under a tempdir, resolves with a matching glob, verifies the
+// absolute paths come back. Pins the "discover + absolutize" pipeline
+// end-to-end without a real runner test.
+func TestResolveGlobs_ResolvesRealFiles(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"a.lua", "b.lua"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("--"), 0o600); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+
+	got := resolveGlobs(context.Background(), []string{filepath.Join(dir, "*.lua")})
+	if len(got) != 2 {
+		t.Fatalf("resolveGlobs returned %d paths, want 2: %v", len(got), got)
+	}
+	for _, p := range got {
+		if !filepath.IsAbs(p) {
+			t.Errorf("path not absolute: %s", p)
+		}
+	}
+}
+
+// TestResolveGlobs_NoMatchIsNil pins that "glob matched nothing"
+// degrades to nil rather than an empty slice — same shape as the
+// nil-input case so downstream callers only need one check.
+func TestResolveGlobs_NoMatchIsNil(t *testing.T) {
+	dir := t.TempDir()
+	got := resolveGlobs(context.Background(), []string{filepath.Join(dir, "nonexistent-*.lua")})
+	if got != nil {
+		t.Errorf("resolveGlobs(no-match) = %v, want nil", got)
+	}
+}
