@@ -18,8 +18,13 @@ import (
 type RunnerMode string
 
 const (
-	// RunnerPlenaryBusted wraps plenary.nvim's test_harness.test_directory.
-	// The user's minimal_init file must bootstrap plenary onto the runtimepath.
+	// RunnerPlenaryBusted runs plenary.busted specs in-process via
+	// require("plenary.busted").run per glob-discovered spec. The user's
+	// minimal_init file must bootstrap plenary onto the runtimepath.
+	// In-process rather than the more obvious test_harness.test_directory
+	// (or PlenaryBustedFile, which routes to the same place): those spawn
+	// a fresh nvim child per spec, and the coverage hook installed in the
+	// parent does not follow into the child.
 	RunnerPlenaryBusted RunnerMode = "plenary-busted"
 	// RunnerMiniTest wraps mini.test's MiniTest.run. The user's minimal_init
 	// file must bootstrap mini.test onto the runtimepath.
@@ -364,13 +369,34 @@ func runnerInvocation(mode RunnerMode, dir string) string {
 	esc := luaEscape(dir)
 	switch mode {
 	case RunnerPlenaryBusted:
+		// In-process invocation via plenary.busted.run(spec) per glob-
+		// discovered file. Both PlenaryBustedFile and PlenaryBustedDirectory
+		// delegate to plenary.test_harness which spawns a fresh nvim child
+		// per spec (via Job:new; see test_harness.lua's test_paths). The
+		// coverage hook installed in this parent process does not survive
+		// into those children, so cover mode would serialize an empty map
+		// and silently report 0%. plenary.busted.run is the raw entry
+		// point the children ultimately call — invoking it directly here
+		// keeps the specs in the current Lua state where the hook that
+		// debug.sethook installed above sees every executed line.
+		//
+		// Discovery is a plain vim.fn.glob under Dir — matches plenary's
+		// own **/*_spec.lua convention. pcall around each spec keeps a
+		// single failing file from aborting the whole run; errors are
+		// surfaced on stderr so the user still sees them.
 		return fmt.Sprintf(`
-local ok, harness = pcall(require, "plenary.test_harness")
+local ok, busted = pcall(require, "plenary.busted")
 if not ok then
-  io.stderr:write("neospec cover: plenary.test_harness not found on runtimepath\n")
+  io.stderr:write("neospec cover: plenary.busted not found on runtimepath\n")
   vim.cmd("cq")
 end
-harness.test_directory("%s", { sequential = true, keep_going = true })
+local specs = vim.fn.glob("%s/**/*_spec.lua", false, true)
+for _, spec in ipairs(specs) do
+  local sok, serr = pcall(busted.run, spec)
+  if not sok then
+    io.stderr:write("neospec cover: " .. spec .. ": " .. tostring(serr) .. "\n")
+  end
+end
 `, esc)
 	case RunnerMiniTest:
 		return fmt.Sprintf(`

@@ -145,11 +145,11 @@ jobs:
           (cd /tmp/plenary.nvim && git log -1 --oneline)
 
       # Every TestBranchInstrumentation_TrueE2E* test — currently the
-      # require-loaded and dofile-loaded variants. Prefix pattern
-      # picks up future E2E siblings automatically (short-circuit,
-      # implicit-arm) once they land. The scripted integration test
-      # that covers the same pipeline without needing Neovim already
-      # ran in the `test` job.
+      # require-loaded and dofile-loaded run-mode variants and the
+      # cover-mode-plus-plenary variant. Prefix pattern picks up
+      # future E2E siblings automatically (short-circuit, implicit-arm)
+      # once they land. The scripted integration test that covers the
+      # same pipeline without needing Neovim already ran in the `test` job.
       - name: Run E2E tests
         env:
           NEOSPEC_E2E: "1"
