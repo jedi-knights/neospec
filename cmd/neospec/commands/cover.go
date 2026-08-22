@@ -34,16 +34,17 @@ type coverExecutor interface {
 
 // coverFlags holds values parsed from CLI flags for the cover command.
 type coverFlags struct {
-	configPath    string
-	runner        string
-	dir           string
-	minimalInit   string
-	neovimVersion string
-	formats       []string
-	coverageDir   string
-	threshold     float64
-	cacheDir      string
-	verbose       bool
+	configPath     string
+	runner         string
+	dir            string
+	minimalInit    string
+	neovimVersion  string
+	formats        []string
+	coverageDir    string
+	coverageSource []string
+	threshold      float64
+	cacheDir       string
+	verbose        bool
 }
 
 // NewCoverCmd builds the `neospec cover` command. cover wraps an existing
@@ -92,6 +93,7 @@ for loading the hook via 'nvim -c "luafile $NEOSPEC_COVER_HOOK"' or equivalent.`
 	f.StringVar(&flags.neovimVersion, "neovim-version", "", "neovim version to use (e.g. stable, nightly, v0.10.4)")
 	f.StringArrayVar(&flags.formats, "format", nil, "output format(s): console, lcov, cobertura, coveralls (repeatable)")
 	f.StringVar(&flags.coverageDir, "coverage-dir", "", "directory for coverage report files")
+	f.StringArrayVar(&flags.coverageSource, "coverage-source", nil, "glob of source files to report even if no wrapped test loads them (repeatable; e.g. 'lua/**/*.lua')")
 	f.Float64Var(&flags.threshold, "threshold", 0, "minimum coverage percentage (0 = disabled)")
 	f.StringVar(&flags.cacheDir, "cache-dir", "", "directory for cached Neovim binaries")
 	f.BoolVarP(&flags.verbose, "verbose", "v", false, "verbose output")
@@ -198,12 +200,13 @@ func buildCoverOpts(flags *coverFlags, args []string, cfg config.Config) (cover.
 	}
 
 	return cover.Opts{
-		Mode:        mode,
-		Version:     version,
-		Dir:         flags.dir,
-		MinimalInit: flags.minimalInit,
-		Command:     args,
-		Verbose:     cfg.Verbose,
+		Mode:            mode,
+		Version:         version,
+		Dir:             flags.dir,
+		MinimalInit:     flags.minimalInit,
+		Command:         args,
+		Verbose:         cfg.Verbose,
+		CoverageSources: flags.coverageSource,
 	}, nil
 }
 

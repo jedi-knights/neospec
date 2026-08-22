@@ -6,6 +6,7 @@ package cover
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/jedi-knights/neospec/internal/adapters/runner"
@@ -42,6 +43,13 @@ type ShimOpts struct {
 	// to. Required. The cover executor reads this file after the wrapped runner
 	// exits and passes the contents to runner.ParseReporterOutput.
 	OutputFile string
+	// CoverageSources is a list of already-resolved absolute paths (post-glob)
+	// that the coverage hook records at zero when no test loads them. Emitted
+	// as `_neospec_coverage_sources = {...}` before the hook runs so the
+	// finalizer picks it up. Without this, cover-mode reports silently omit
+	// files no wrapped test touched — flattering the percentage on any run
+	// whose test suite doesn't reach every module.
+	CoverageSources []string
 }
 
 // BuildShim constructs the Lua entry-point file for a cover-mode invocation.
@@ -87,6 +95,14 @@ func BuildShim(opts ShimOpts) ([]byte, error) {
 	var sb strings.Builder
 	sb.Grow(len(hook) + len(reporter) + 2048)
 
+	// Emit the resolved coverage-source list before the hook loads so
+	// the finalizer sees it during _neospec_coverage_finalize and adds
+	// zero-count entries for files no wrapped test touched. Without
+	// this, cover-mode reports silently omit those modules — the exact
+	// misleading-percentage failure mode the coverage_source knob was
+	// designed to prevent, now available in cover mode too.
+	writeCoverageSources(&sb, opts.CoverageSources)
+
 	sb.Write(hook)
 	sb.WriteByte('\n')
 	sb.Write(reporter)
@@ -100,6 +116,31 @@ func BuildShim(opts ShimOpts) ([]byte, error) {
 	sb.WriteString(`vim.cmd("qa!")` + "\n")
 
 	return []byte(sb.String()), nil
+}
+
+// writeCoverageSources emits the `_neospec_coverage_sources = {...}`
+// Lua global with each path double-quoted and escaped via luaEscape.
+// Sorted for deterministic shim bytes so callers hashing the shim to
+// detect drift see identical output for identical inputs — the same
+// determinism promise every other shim emission holds.
+//
+// Empty and nil input emit nothing so the coverage hook's default
+// behaviour (record only files a test loaded) runs unchanged.
+func writeCoverageSources(sb *strings.Builder, paths []string) {
+	if len(paths) == 0 {
+		return
+	}
+	sorted := make([]string, len(paths))
+	copy(sorted, paths)
+	sort.Strings(sorted)
+	sb.WriteString("_neospec_coverage_sources = {")
+	for i, path := range sorted {
+		if i > 0 {
+			sb.WriteString(", ")
+		}
+		fmt.Fprintf(sb, `"%s"`, luaEscape(path))
+	}
+	sb.WriteString("}\n")
 }
 
 // fileCaptureWrapper rewrites _neospec_report to redirect its io.write output
