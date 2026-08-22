@@ -60,10 +60,15 @@ end
 return M
 `)
 
-	// dofile with an absolute path — sidesteps package.path setup
-	// complexity. describe/it/assert come from neospec's harness
-	// which is loaded before this file runs.
-	testContent := fmt.Sprintf(`local M = dofile(%q)
+	// require (not dofile) so the module goes through package.loaders —
+	// which is where the coverage hook's shim lives. dofile bypasses
+	// the shim entirely and would load the on-disk (unrewritten)
+	// source, silently defeating instrumentation. Prepend the source
+	// dir to package.path so require("mod") resolves to srcFile.
+	// describe/it/assert come from neospec's harness which loads
+	// before this file runs.
+	testContent := fmt.Sprintf(`package.path = %q .. package.path
+local M = require("mod")
 describe("classify", function()
   it("high", function()
     assert.equals("high", M.classify(20))
@@ -73,7 +78,7 @@ describe("classify", function()
     assert.equals("mid", M.classify(7))
   end)
 end)
-`, srcFile)
+`, dir+"/?.lua;")
 	testFile := writeE2EFile(t, dir, "test/mod_spec.lua", testContent)
 
 	// Real runner with real Neovim and real rewriter — nothing
