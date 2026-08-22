@@ -902,7 +902,10 @@ func TestBuildShim_EmitsFunctionNamesWhenPresent(t *testing.T) {
 
 // TestBuildShim_NoFunctionNamesEmitsNothing pins the fallback path: when
 // no map is supplied, the shim carries no _neospec_function_names global
-// so coverage_hook.lua's NAME_PATTERNS regexes still run.
+// so coverage_hook.lua labels every function as "anonymous@N" — no crash,
+// just no real names. (Callers who want real names configure
+// coverage_source; the map only carries entries for files pre-processed
+// on the Go side.)
 func TestBuildShim_NoFunctionNamesEmitsNothing(t *testing.T) {
 	shim, err := buildShim("/tests/spec.lua", "", nil, nil, nil, nil)
 	if err != nil {
@@ -1035,6 +1038,34 @@ func TestCoverageHook_HasBranchCounterGlobal(t *testing.T) {
 	}
 	if !strings.Contains(got, "_neospec_rewritten_sources") {
 		t.Error("coverage_hook.lua missing package.loaders shim for _neospec_rewritten_sources")
+	}
+}
+
+// TestCoverageHook_NoRegexNameFallback pins that the NAME_PATTERNS
+// array and its read_source_lines helper stay deleted. Reintroducing
+// them would revert the source-of-truth for function names from the
+// AST walk (Go-side, handles multi-line signatures + table-literal
+// method fields + multi-value assignments) to fragile source-line
+// regex (Lua-side, misses all three). Any run whose function names
+// are suddenly worse than expected would trace back to this regression.
+//
+// Historical mentions of NAME_PATTERNS in doc comments are fine — the
+// check targets the actual code artefacts (array declaration, use
+// site, source-line match call).
+func TestCoverageHook_NoRegexNameFallback(t *testing.T) {
+	hook, err := luaFS.ReadFile("lua/coverage_hook.lua")
+	if err != nil {
+		t.Fatalf("reading coverage_hook.lua: %v", err)
+	}
+	got := string(hook)
+	if strings.Contains(got, "local NAME_PATTERNS") || strings.Contains(got, "ipairs(NAME_PATTERNS)") {
+		t.Error("coverage_hook.lua reintroduced NAME_PATTERNS array — the AST walk in cover.ExtractFunctions is the sole source of function names now")
+	}
+	if strings.Contains(got, "function read_source_lines") || strings.Contains(got, "read_source_lines(") {
+		t.Error("coverage_hook.lua reintroduced read_source_lines — was only used by the deleted NAME_PATTERNS fallback")
+	}
+	if strings.Contains(got, "src:match") {
+		t.Error("coverage_hook.lua contains src:match — likely a regex fallback for name recovery that should live Go-side")
 	}
 }
 
