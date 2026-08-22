@@ -8,11 +8,11 @@ import "os"
 // so the coverage hook can look up definition names without pattern-
 // matching source lines.
 //
-// This is the Go side of the go-lua-parser replacement for
-// coverage_hook.lua's NAME_PATTERNS regex approach. The Lua-side lookup
-// still falls back to the patterns for any (path, line) the extractor
-// did not cover — chiefly files that were not in the coverage source
-// list, so no name was pre-computed.
+// This is the Go side of the go-lua-parser replacement for the old
+// coverage_hook.lua NAME_PATTERNS regex approach — now the sole
+// source of function names. Any (path, line) the extractor did not
+// cover renders as "anonymous@N" in the report; users who want real
+// names for a file must include it in coverage_source.
 //
 // Best-effort: files that cannot be read are silently skipped (matches
 // PopulateBranches). Parse errors do not abort the map — whatever

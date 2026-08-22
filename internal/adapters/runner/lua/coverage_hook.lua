@@ -36,9 +36,9 @@ end
 -- so subsequent loaders (the default file loader) handle them normally.
 --
 -- Chunk name is "@" + original_path so debug.getinfo(...).source still
--- resolves to the user's file — line coverage, stack traces, and any
--- source-line lookup (e.g. NAME_PATTERNS fallback in function_name)
--- continue to see the original path, not a shadow.
+-- resolves to the user's file — line coverage, stack traces, and every
+-- other consumer of the source position continue to see the original
+-- path, not a shadow.
 if type(_neospec_rewritten_sources) == "table" and next(_neospec_rewritten_sources) ~= nil then
 	local loaders = package.loaders or package.searchers
 	if type(loaders) == "table" then
@@ -318,44 +318,28 @@ end
 
 _neospec_functions = _neospec_functions or {}
 
---- Read a source file into a line-indexed table, or nil if unreadable.
-local function read_source_lines(path)
-	local fh = io.open(path, "r")
-	if not fh then
-		return nil
-	end
-	local lines = {}
-	for line in fh:lines() do
-		lines[#lines + 1] = line
-	end
-	fh:close()
-	return lines
-end
-
--- Ordered most specific first; the first match wins.
-local NAME_PATTERNS = {
-	"local%s+function%s+([%w_]+)%s*%(", -- local function foo(
-	"function%s+([%w_%.:]+)%s*%(", -- function M.foo( / function M:foo(
-	"local%s+([%w_]+)%s*=%s*function", -- local foo = function
-	"([%w_%.:]+)%s*=%s*function%s*%(", -- M.foo = function(
-	"%[[\"']([^\"']+)[\"']%]%s*=%s*function", -- t["foo"] = function
-	"([%w_]+)%s*=%s*function", -- foo = function
-}
-
---- Best-effort function name from the source line where it is defined.
+--- Function name at path:lineno from the AST-recovered map emitted by
+--- the Go side as _neospec_function_names[path][lineno]. Populated when
+--- the runner has a FunctionNameResolver (cover.FunctionNameMap in
+--- production, wired by default in the CLI).
 ---
---- Prefers the AST-recovered name emitted by the Go side as
---- _neospec_function_names[path][lineno] (populated when the runner has
---- a FunctionNameResolver — cover.FunctionNameMap in production). Falls
---- back to source-line NAME_PATTERNS regex matching for any (path, line)
---- the extractor did not cover — chiefly files outside the coverage
---- source list, so no name was pre-computed.
+--- Callers whose coverage_source glob doesn't reach a file loaded at
+--- runtime will see "anonymous@N" for every function in that file —
+--- the AST map only contains entries for files pre-processed on the
+--- Go side. Adding the file to coverage_source is the fix; the map
+--- can only carry names for files the user has told us to look at.
 ---
---- @param src string|nil the source line
+--- An earlier revision kept a source-line NAME_PATTERNS regex fallback
+--- for this exact case, but the regex missed multi-line signatures,
+--- table-literal method fields, and multi-value assignments — shapes
+--- the AST walk handles natively. Rather than maintain a second,
+--- lower-quality name-recovery path in Lua, the fallback was removed
+--- in favour of surfacing the config gap directly.
+---
 --- @param lineno integer 1-based definition line
 --- @param path string|nil absolute file path for the AST lookup
 --- @return string
-local function function_name(src, lineno, path)
+local function function_name(lineno, path)
 	if type(_neospec_function_names) == "table" and type(path) == "string" then
 		local file_map = _neospec_function_names[path]
 		if type(file_map) == "table" then
@@ -365,17 +349,9 @@ local function function_name(src, lineno, path)
 			end
 		end
 	end
-	if type(src) == "string" then
-		for _, pattern in ipairs(NAME_PATTERNS) do
-			local name = src:match(pattern)
-			if name then
-				return name
-			end
-		end
-	end
-	-- No recognisable definition form: an anonymous callback, a method in a
-	-- table literal, or a multi-line signature. Label it by position rather
-	-- than guessing.
+	-- No AST-recovered name: an anonymous callback, or a file the
+	-- user did not include in coverage_source. Label it by position
+	-- rather than guessing at the source.
 	return "anonymous@" .. tostring(lineno)
 end
 
@@ -435,7 +411,6 @@ local function record_functions(path, chunk, hits, util)
 		return
 	end
 
-	local src = read_source_lines(path)
 	local records = {}
 	for _, proto in ipairs(protos) do
 		-- The definition line executes when the closure is CREATED, not when it
@@ -454,7 +429,7 @@ local function record_functions(path, chunk, hits, util)
 		end
 
 		records[#records + 1] = {
-			name = function_name(src and src[proto.line] or nil, proto.line, path),
+			name = function_name(proto.line, path),
 			line = proto.line,
 			count = count,
 		}

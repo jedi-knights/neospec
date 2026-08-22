@@ -33,9 +33,10 @@ type Runner struct {
 	// funcNamesFn, when non-nil, resolves a per-file function-name map for
 	// the resolved coverage sources. The Runner emits its result as a
 	// _neospec_function_names Lua global so the coverage hook can look up
-	// definition names by (path, line) rather than pattern-matching. Set
-	// by WithFunctionNameResolver; when nil the runner emits nothing and
-	// the hook falls back to its NAME_PATTERNS regexes.
+	// definition names by (path, line). Set by WithFunctionNameResolver;
+	// when nil the runner emits nothing and every function label in the
+	// report falls back to "anonymous@N" — real names require configuring
+	// coverage_source so the Go side can pre-process the file.
 	funcNamesFn   FunctionNameResolver
 	functionNames map[string]map[int]string
 	// srcRewriterFn, when non-nil, resolves per-file rewritten source for
@@ -147,11 +148,12 @@ func (r *Runner) WithCoverageSources(patterns []string) *Runner {
 // WithFunctionNameResolver sets a callback that returns a (path, line) →
 // name map for the resolved coverage sources. When set, the runner emits
 // the result as a _neospec_function_names Lua global so the coverage hook
-// can look up definition names via AST-recovered data instead of source-
-// line pattern matching. Wire in cover.FunctionNameMap from the CLI.
+// can look up definition names by (path, line). Wire in
+// cover.FunctionNameMap from the CLI.
 //
-// Nil is the default and preserves current behaviour: no global emitted,
-// the hook falls back to its NAME_PATTERNS regexes.
+// Nil is the default: no global emitted; every function label falls back
+// to "anonymous@N". Real names require configuring coverage_source so the
+// Go side can pre-process the file.
 func (r *Runner) WithFunctionNameResolver(fn FunctionNameResolver) *Runner {
 	r.funcNamesFn = fn
 	return r

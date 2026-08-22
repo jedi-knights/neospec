@@ -65,9 +65,9 @@ func longBracketLevel(src string) int {
 // bytes — reproducibility of the sandboxed run is a hard constraint,
 // and callers hash the shim to detect drift.
 //
-// Empty and nil inputs emit nothing so the coverage hook's fallback
-// (NAME_PATTERNS) still runs. A `_neospec_function_names = {}` global
-// would work but is noise.
+// Empty and nil inputs emit nothing; the coverage hook then labels
+// every function as "anonymous@N". A `_neospec_function_names = {}`
+// global would work but is noise.
 func writeFunctionNames(sb *strings.Builder, m map[string]map[int]string) {
 	if len(m) == 0 {
 		return
@@ -223,12 +223,10 @@ func buildShim(testFile, initFile string, coverageInclude, coverageSources []str
 	}
 
 	// AST-recovered function-name map: {path -> {line -> name}}. The
-	// coverage hook consults this before falling back to its NAME_PATTERNS
-	// regexes, so a name recovered from the AST (which handles multi-line
-	// signatures, table-literal method fields, and other shapes the
-	// patterns miss) always wins over a source-line pattern match.
-	// Emitted before the hook so the global is set when record_functions
-	// runs.
+	// coverage hook reads this to name every function it records;
+	// missing entries fall back to "anonymous@N" by line number.
+	// Emitted before the hook so the global is set when
+	// record_functions runs.
 	writeFunctionNames(&sb, functionNames)
 
 	// Rewritten source map for branch instrumentation: {path -> source}.
