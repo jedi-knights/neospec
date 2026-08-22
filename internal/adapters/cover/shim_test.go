@@ -186,3 +186,68 @@ func TestBuildShim_CoverageSourcesEscapesSpecialChars(t *testing.T) {
 		t.Errorf("path double-quote not escaped:\n%s", shim)
 	}
 }
+
+// TestBuildShim_EmitsCoverageIncludeWhenPresent pins that the
+// coverage-include substring list lands as a Lua global in the user's
+// given order. Order is preserved (not sorted) because the hook
+// short-circuits on the first match — reorder changes the fast path
+// but never the result set.
+func TestBuildShim_EmitsCoverageIncludeWhenPresent(t *testing.T) {
+	shim, err := BuildShim(ShimOpts{
+		Mode:            RunnerPlenaryBusted,
+		Dir:             "tests/",
+		OutputFile:      "/tmp/out.json",
+		CoverageInclude: []string{"lua/", "plugin/"},
+	})
+	if err != nil {
+		t.Fatalf("BuildShim: %v", err)
+	}
+	got := string(shim)
+	if !strings.Contains(got, `_neospec_coverage_include = {"lua/", "plugin/"}`) {
+		t.Errorf("global emitted incorrectly:\n%s", got)
+	}
+	// Emitted BEFORE the coverage hook loads so is_project_source sees
+	// the global on every line event.
+	includeIdx := strings.Index(got, "_neospec_coverage_include = {")
+	hookIdx := strings.Index(got, "debug.sethook")
+	if includeIdx == -1 || hookIdx == -1 || includeIdx > hookIdx {
+		t.Errorf("include global must be emitted before the hook (include=%d hook=%d)", includeIdx, hookIdx)
+	}
+}
+
+// TestBuildShim_NoCoverageIncludeEmitsNothing pins the default path:
+// no filter emits no global, so the coverage hook records every file
+// the wrapped runner touches (Neovim runtime included). Matches the
+// run command's behavior.
+func TestBuildShim_NoCoverageIncludeEmitsNothing(t *testing.T) {
+	shim, err := BuildShim(ShimOpts{
+		Mode:       RunnerPlenaryBusted,
+		Dir:        "tests/",
+		OutputFile: "/tmp/out.json",
+	})
+	if err != nil {
+		t.Fatalf("BuildShim: %v", err)
+	}
+	if strings.Contains(string(shim), "_neospec_coverage_include = {") {
+		t.Errorf("global should be absent for nil include:\n%s", shim)
+	}
+}
+
+// TestBuildShim_CoverageIncludeEscapesSpecialChars pins escape safety
+// for substrings — a pattern with a quote (rare, possible on
+// filesystems with unusual paths) must be escaped or LuaJIT rejects
+// the shim.
+func TestBuildShim_CoverageIncludeEscapesSpecialChars(t *testing.T) {
+	shim, err := BuildShim(ShimOpts{
+		Mode:            RunnerPlenaryBusted,
+		Dir:             "tests/",
+		OutputFile:      "/tmp/out.json",
+		CoverageInclude: []string{`weird"pattern`},
+	})
+	if err != nil {
+		t.Fatalf("BuildShim: %v", err)
+	}
+	if !strings.Contains(string(shim), `\"pattern`) {
+		t.Errorf("include pattern double-quote not escaped:\n%s", shim)
+	}
+}
