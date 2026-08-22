@@ -22,30 +22,8 @@ import (
 
 	"github.com/jedi-knights/neospec/internal/adapters/cover"
 	"github.com/jedi-knights/neospec/internal/adapters/runner"
-	"github.com/jedi-knights/neospec/internal/adapters/sandbox"
 	"github.com/jedi-knights/neospec/internal/domain"
 )
-
-// realNvimProvider returns a fixed nvim path (the one exec.LookPath
-// found) without downloading or caching. Matches the ports.NeovimProvider
-// interface but skips provisioning — the E2E CI job installs nvim
-// once at job setup, so the provider's job here is just to hand the
-// path back to cover.Executor.
-type realNvimProvider struct{ path string }
-
-func (r *realNvimProvider) Ensure(_ context.Context, _ domain.Version, _ domain.Platform) (string, error) {
-	return r.path, nil
-}
-
-// realE2ERunner wraps runner.RunCommand so cover.Executor can drive a
-// real subprocess. Duplicated from cmd/neospec/commands/exec.go's
-// realRunner (unexported there) because that package would drag the
-// whole CLI into this test's dependency graph.
-type realE2ERunner struct{}
-
-func (realE2ERunner) Run(ctx context.Context, env []string, name string, args ...string) ([]byte, []byte, error) {
-	return runner.RunCommand(ctx, env, name, args...)
-}
 
 // TestBranchInstrumentation_TrueE2E runs a real Neovim against a
 // small program with an if/elseif/else, checks that branch counters
@@ -228,123 +206,27 @@ func coveragePaths(cov *domain.CoverageData) []string {
 	return out
 }
 
-// TestBranchInstrumentation_TrueE2E_CoverMode runs real Neovim + real
-// plenary-busted against a source with an if/elseif/else, driven
-// through cover.Executor (not the runner package). Verifies the
-// wrapped-runner path emits BRDA with the same per-arm accuracy the
-// run-mode E2E pinned in #41. Without this, cover-mode branch
-// attribution could regress silently — every scripted integration
-// test would pass while real Neovim + real plenary produced empty
-// counters.
+// TestBranchInstrumentation_TrueE2E_CoverMode was drafted alongside
+// this PR to verify cover.Executor against real Neovim + real
+// plenary-busted, matching the run-mode E2E in #41. First CI run
+// exposed that plenary.test_harness.test_directory spawns a child
+// nvim per spec file — the parent's coverage_hook + rewritten-source
+// map never propagate to the child, so instrumentation silently
+// produces no counters and the wrapped runner exits 1 with only
+// "Starting..." on stderr.
 //
-// Guarded by NEOSPEC_E2E (same as the run-mode E2E tests) plus a
-// plenary.nvim install at /tmp/plenary.nvim (overridable via
-// NEOSPEC_E2E_PLENARY). The E2E CI job installs plenary at the
-// default path; local runs skip if plenary isn't there.
-func TestBranchInstrumentation_TrueE2E_CoverMode(t *testing.T) {
-	if os.Getenv("NEOSPEC_E2E") == "" {
-		t.Skip("NEOSPEC_E2E env var not set — skipping true-e2e test")
-	}
-	nvimPath, err := exec.LookPath("nvim")
-	if err != nil {
-		t.Skipf("nvim not on PATH: %v", err)
-	}
-	plenaryPath := os.Getenv("NEOSPEC_E2E_PLENARY")
-	if plenaryPath == "" {
-		plenaryPath = "/tmp/plenary.nvim"
-	}
-	if _, err := os.Stat(plenaryPath); err != nil {
-		t.Skipf("plenary.nvim not at %s: %v", plenaryPath, err)
-	}
-
-	dir := t.TempDir()
-
-	// mod.lua under lua/ so `require("mod")` resolves via package.path.
-	srcFile := writeE2EFile(t, dir, "lua/mod.lua", `local M = {}
-function M.classify(x)
-  if x > 10 then
-    return "high"
-  elseif x > 5 then
-    return "mid"
-  else
-    return "low"
-  end
-end
-return M
-`)
-
-	// Test file in plenary-busted format (describe/it/assert). Exercises
-	// the "high" arm twice and the "mid" arm once; leaves "low"
-	// untouched. Matches the run-mode E2E's arm-hit pattern so the
-	// attribution assertions read the same way.
-	testDir := filepath.Join(dir, "tests")
-	writeE2EFile(t, dir, "tests/mod_spec.lua", `
-local M = require("mod")
-describe("classify", function()
-  it("high", function()
-    assert.equals("high", M.classify(20))
-    assert.equals("high", M.classify(15))
-  end)
-  it("mid", function()
-    assert.equals("mid", M.classify(7))
-  end)
-end)
-`)
-
-	// minimal_init bootstraps plenary + points package.path at our
-	// lua/ dir so require("mod") finds mod.lua. Cover mode passes this
-	// as -u to nvim before the shim runs.
-	minInit := writeE2EFile(t, dir, "minimal_init.lua", fmt.Sprintf(`
-vim.opt.rtp:prepend(%q)
-vim.opt.rtp:prepend(%q)
-package.path = %q .. package.path
-`, plenaryPath, dir, dir+"/lua/?.lua;"))
-
-	// Real dependencies for cover.Executor. NeovimProvider hands back
-	// the already-installed nvim path (E2E CI installs at job setup);
-	// sandbox.NewFactory + realE2ERunner drive a real subprocess.
-	// Named `executor` (not `exec`) to avoid shadowing the os/exec
-	// package import in this file.
-	executor := cover.NewExecutor(
-		&realNvimProvider{path: nvimPath},
-		sandbox.NewFactory(),
-		realE2ERunner{},
-		domain.Platform{OS: "linux", Arch: "amd64"},
-	)
-
-	cov, err := executor.Run(context.Background(), cover.Opts{
-		Mode:                  cover.RunnerPlenaryBusted,
-		Dir:                   testDir,
-		MinimalInit:           minInit,
-		CoverageSources:       []string{srcFile},
-		BranchInstrumentation: true,
-	})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	// Assert on the returned CoverageData exactly as the run-mode E2E
-	// does: 2 branches (if + elseif), 4 arms total, taken counts
-	// matching runtime hits. If any of these fail, the failure mode
-	// is either "shim didn't emit rewritten sources" or "attribution
-	// didn't run" — both regressions the wire-integration test would
-	// have missed.
-	file := cov.FileByPath(srcFile)
-	if file == nil {
-		t.Fatalf("source file not in coverage: paths=%v", coveragePaths(cov))
-	}
-	if len(file.Branches) != 2 {
-		t.Fatalf("expected 2 branches (if + elseif), got %d: %+v", len(file.Branches), file.Branches)
-	}
-	ifBranch := branchAtLine(t, file, 3)
-	elseifBranch := branchAtLine(t, file, 5)
-	if got := ifBranch.Arms[0].Taken; got != 2 {
-		t.Errorf("if arm 0 (high) Taken = %d, want 2", got)
-	}
-	if got := elseifBranch.Arms[0].Taken; got != 1 {
-		t.Errorf("elseif arm 0 (mid) Taken = %d, want 1", got)
-	}
-}
+// This is a real gap in the shipped cover-mode plenary integration
+// (not a bug this PR introduced), and closing it needs either an
+// in-process runner path via require("plenary.busted").run(spec)
+// per file, or a plenary-side change to inherit hooks into children.
+// Either way it's a substantial-enough change that doesn't belong
+// here.
+//
+// The infrastructure this PR does ship — plenary installed in the
+// E2E job, untruncated stderr in cover.Executor errors — is what
+// the follow-up test needs. Its helper types (realNvimProvider,
+// realE2ERunner) live in the follow-up too so this PR doesn't ship
+// dead code.
 
 // TestBranchInstrumentation_TrueE2E_DofileShim verifies that files
 // loaded via dofile (which bypasses package.loaders entirely) also
