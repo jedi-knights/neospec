@@ -347,3 +347,142 @@ func TestResolveGlobs_NoMatchIsNil(t *testing.T) {
 		t.Errorf("resolveGlobs(no-match) = %v, want nil", got)
 	}
 }
+
+// TestExecutor_BranchInstrumentationDrivesFullPipeline verifies the
+// end-to-end wiring the executor picks up when opts.BranchInstrumentation
+// is set: real RewriteAll on the resolved source, real shim emission
+// of rewritten bytes, and — critically — real PopulateBranches +
+// ApplyBranchCounters called against the CoverageData that comes back.
+// The scripted fakeRunner supplies canned reporter JSON that includes
+// br_counts, standing in for what a real Neovim run would produce.
+func TestExecutor_BranchInstrumentationDrivesFullPipeline(t *testing.T) {
+	// Arrange: a source with three arms (if/elseif/else). RewriteAll
+	// will produce 3 injections whose BranchIDs we can read back to
+	// build a matching counter map.
+	dir := t.TempDir()
+	src := writeFileAbs(t, dir, "mod.lua", `local M = {}
+function M.classify(x)
+  if x > 10 then
+    return "high"
+  elseif x > 5 then
+    return "mid"
+  else
+    return "low"
+  end
+end
+return M
+`)
+
+	// Precompute what the executor's internal RewriteAll call will
+	// produce, so the fake reporter JSON can reference the exact
+	// BranchIDs the executor will attribute against.
+	_, injs := RewriteAll([]string{src})
+	if len(injs) != 3 {
+		t.Fatalf("expected 3 injections (then + elseif + else), got %d", len(injs))
+	}
+
+	// Reporter JSON simulating a run where the "high" arm ran twice
+	// and the "mid" arm ran once — matches the pattern the true-e2e
+	// test in cover_test.go pins for run mode.
+	reply := []byte(`{"tests":[],"coverage":[{"path":"` + src + `","lines":{"4":2,"6":1,"8":0}}],"br_counts":{"` +
+		itoa(injs[0].BranchID) + `":2,"` + itoa(injs[1].BranchID) + `":1}}`)
+
+	nvim := &fakeNeovim{path: "/fake/nvim"}
+	sbFactory := &fakeSandboxFactory{dir: dir}
+	runner := &fakeRunner{writeJSON: reply}
+
+	// Act
+	exec := NewExecutor(nvim, sbFactory, runner, domain.Platform{OS: "linux", Arch: "amd64"})
+	cov, err := exec.Run(context.Background(), Opts{
+		Mode:                  RunnerPlenaryBusted,
+		Dir:                   "tests/",
+		CoverageSources:       []string{src},
+		BranchInstrumentation: true,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Assert — attribution ran, arms have the runtime counter values.
+	// This mirrors the assertions the run-mode integration test pins
+	// for the same source shape.
+	if cov == nil || len(cov.Files) != 1 {
+		t.Fatalf("expected 1 covered file, got: %+v", cov)
+	}
+	file := cov.Files[0]
+	if len(file.Branches) != 2 {
+		t.Fatalf("expected 2 branches (if + elseif), got %d", len(file.Branches))
+	}
+	// if-branch: arm 0 (then, high) taken 2× via counter attribution;
+	// arm 1 (fallthrough to elseif body line 6) taken 1× via line-hit
+	// derivation on line 6.
+	ifBranch := branchAt(t, file, 3)
+	if got := ifBranch.Arms[0].Taken; got != 2 {
+		t.Errorf("if arm 0 (high) Taken = %d, want 2", got)
+	}
+	if got := ifBranch.Arms[1].Taken; got != 1 {
+		t.Errorf("if arm 1 (fallthrough) Taken = %d, want 1", got)
+	}
+	// elseif-branch: arm 0 (then, mid) taken 1× via counter — this is
+	// the arm the pre-#40 arm-index bug would have written to arm 1.
+	elseifBranch := branchAt(t, file, 5)
+	if got := elseifBranch.Arms[0].Taken; got != 1 {
+		t.Errorf("elseif arm 0 (mid) Taken = %d, want 1", got)
+	}
+}
+
+// writeFileAbs writes contents to dir/name and returns the absolute
+// path. Convenient for tests that need to both write a fixture and
+// look it up in a map keyed by absolute path.
+func writeFileAbs(t *testing.T, dir, name, contents string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatalf("Abs: %v", err)
+	}
+	return abs
+}
+
+// branchAt is a small helper to keep branch lookups in the test body
+// readable — otherwise the arm assertions get lost in linear scans.
+func branchAt(t *testing.T, file *domain.FileCoverage, line int) *domain.BranchCoverage {
+	t.Helper()
+	for i := range file.Branches {
+		if file.Branches[i].Line == line {
+			return &file.Branches[i]
+		}
+	}
+	t.Fatalf("no branch at line %d", line)
+	return nil
+}
+
+// itoa is a tiny stringer so the reporter-JSON literal above stays
+// readable without importing strconv into this file for one call.
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		i--
+		buf[i] = '-'
+	}
+	return string(buf[i:])
+}

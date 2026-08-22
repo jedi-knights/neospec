@@ -337,3 +337,102 @@ func TestBuildShim_FunctionNamesEscapesSpecialChars(t *testing.T) {
 		t.Errorf("name double-quote not escaped:\n%s", got)
 	}
 }
+
+// TestBuildShim_EmitsRewrittenSourcesWhenPresent pins that a non-nil
+// rewritten-source map lands as a Lua global with sorted paths and
+// long-bracket-quoted source values.
+func TestBuildShim_EmitsRewrittenSourcesWhenPresent(t *testing.T) {
+	rewrites := map[string]string{
+		"/src/b.lua": "if x then _neospec_br(2); B() end",
+		"/src/a.lua": "if y then _neospec_br(1); A() end",
+	}
+	shim, err := BuildShim(ShimOpts{
+		Mode:             RunnerPlenaryBusted,
+		Dir:              "tests/",
+		OutputFile:       "/tmp/out.json",
+		RewrittenSources: rewrites,
+	})
+	if err != nil {
+		t.Fatalf("BuildShim: %v", err)
+	}
+	got := string(shim)
+	if !strings.Contains(got, "_neospec_rewritten_sources = {") {
+		t.Errorf("global assignment missing:\n%s", got)
+	}
+	// Sorted paths: a.lua before b.lua for reproducibility.
+	aIdx := strings.Index(got, `["/src/a.lua"]`)
+	bIdx := strings.Index(got, `["/src/b.lua"]`)
+	if aIdx == -1 || bIdx == -1 || aIdx > bIdx {
+		t.Errorf("paths out of sorted order (a=%d b=%d)", aIdx, bIdx)
+	}
+	// Long-bracket delimiter is used (level 0 for these simple sources).
+	if !strings.Contains(got, "[[\nif y then _neospec_br(1); A() end]]") {
+		t.Errorf("expected long-bracket emission of rewritten source:\n%s", got)
+	}
+	// Emitted BEFORE the hook loads so the loader shims see the global
+	// when they install themselves.
+	rewritesIdx := strings.Index(got, "_neospec_rewritten_sources = {")
+	hookIdx := strings.Index(got, "debug.sethook")
+	if rewritesIdx == -1 || hookIdx == -1 || rewritesIdx > hookIdx {
+		t.Errorf("rewrites global must be emitted before the hook (rewrites=%d hook=%d)", rewritesIdx, hookIdx)
+	}
+}
+
+// TestBuildShim_RewrittenSourcesEscapesLongBracketConflict verifies
+// that source containing `]]` bumps the long-bracket level so the
+// delimiter still terminates unambiguously.
+func TestBuildShim_RewrittenSourcesEscapesLongBracketConflict(t *testing.T) {
+	rewrites := map[string]string{
+		"/src/a.lua": "local s = [[has ]] inside]]",
+	}
+	shim, err := BuildShim(ShimOpts{
+		Mode:             RunnerPlenaryBusted,
+		Dir:              "tests/",
+		OutputFile:       "/tmp/out.json",
+		RewrittenSources: rewrites,
+	})
+	if err != nil {
+		t.Fatalf("BuildShim: %v", err)
+	}
+	got := string(shim)
+	if !strings.Contains(got, "[=[") || !strings.Contains(got, "]=],") {
+		t.Errorf("level-1 delimiter not used for source containing ]]:\n%s", got)
+	}
+}
+
+// TestBuildShim_NoRewrittenSourcesEmitsNothing pins the off path:
+// nil / empty map produces no _neospec_rewritten_sources global so
+// the coverage_hook's loader shims never install themselves.
+func TestBuildShim_NoRewrittenSourcesEmitsNothing(t *testing.T) {
+	shim, err := BuildShim(ShimOpts{
+		Mode:       RunnerPlenaryBusted,
+		Dir:        "tests/",
+		OutputFile: "/tmp/out.json",
+	})
+	if err != nil {
+		t.Fatalf("BuildShim: %v", err)
+	}
+	if strings.Contains(string(shim), "_neospec_rewritten_sources = {") {
+		t.Errorf("global should be absent for nil map:\n%s", shim)
+	}
+}
+
+// TestLongBracketLevel_PicksMinimumSafeLevel unit test on the helper.
+// Level chosen must be the smallest one whose closer doesn't appear
+// inside src — otherwise the string terminates early and produces
+// broken Lua.
+func TestLongBracketLevel_PicksMinimumSafeLevel(t *testing.T) {
+	cases := []struct {
+		src  string
+		want int
+	}{
+		{"no brackets here", 0},
+		{"has ]] inside", 1},
+		{"has ]] and ]=] inside", 2},
+	}
+	for _, c := range cases {
+		if got := longBracketLevel(c.src); got != c.want {
+			t.Errorf("longBracketLevel(%q) = %d, want %d", c.src, got, c.want)
+		}
+	}
+}
