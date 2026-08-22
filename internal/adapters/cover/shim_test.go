@@ -251,3 +251,89 @@ func TestBuildShim_CoverageIncludeEscapesSpecialChars(t *testing.T) {
 		t.Errorf("include pattern double-quote not escaped:\n%s", shim)
 	}
 }
+
+// TestBuildShim_EmitsFunctionNamesWhenPresent pins that the AST-
+// recovered name map lands as a Lua global with paths and line
+// numbers sorted for deterministic bytes.
+func TestBuildShim_EmitsFunctionNamesWhenPresent(t *testing.T) {
+	names := map[string]map[int]string{
+		"/src/b.lua": {42: "M.bar"},
+		"/src/a.lua": {1: "foo", 15: "M.helper"},
+	}
+	shim, err := BuildShim(ShimOpts{
+		Mode:          RunnerPlenaryBusted,
+		Dir:           "tests/",
+		OutputFile:    "/tmp/out.json",
+		FunctionNames: names,
+	})
+	if err != nil {
+		t.Fatalf("BuildShim: %v", err)
+	}
+	got := string(shim)
+	if !strings.Contains(got, "_neospec_function_names = {") {
+		t.Errorf("global assignment missing:\n%s", got)
+	}
+	// Path order must be sorted for reproducibility.
+	aIdx := strings.Index(got, `"/src/a.lua"`)
+	bIdx := strings.Index(got, `"/src/b.lua"`)
+	if aIdx == -1 || bIdx == -1 || aIdx > bIdx {
+		t.Errorf("paths out of sorted order (a=%d b=%d)", aIdx, bIdx)
+	}
+	// Line numbers within a path must be sorted (1 before 15).
+	oneIdx := strings.Index(got, `[1]="foo"`)
+	fifteenIdx := strings.Index(got, `[15]="M.helper"`)
+	if oneIdx == -1 || fifteenIdx == -1 || oneIdx > fifteenIdx {
+		t.Errorf("lines out of sorted order (1=%d 15=%d)", oneIdx, fifteenIdx)
+	}
+	// Emitted BEFORE the coverage hook loads so record_functions sees
+	// the global when it runs during _neospec_coverage_finalize.
+	namesIdx := strings.Index(got, "_neospec_function_names = {")
+	hookIdx := strings.Index(got, "debug.sethook")
+	if namesIdx == -1 || hookIdx == -1 || namesIdx > hookIdx {
+		t.Errorf("names global must be emitted before the hook (names=%d hook=%d)", namesIdx, hookIdx)
+	}
+}
+
+// TestBuildShim_NoFunctionNamesEmitsNothing pins the fallback path:
+// no name map emits no global, so coverage_hook labels every function
+// as "anonymous@N" — same as when the map is present but a particular
+// (path, line) isn't in it. No crash; just no real names.
+func TestBuildShim_NoFunctionNamesEmitsNothing(t *testing.T) {
+	shim, err := BuildShim(ShimOpts{
+		Mode:       RunnerPlenaryBusted,
+		Dir:        "tests/",
+		OutputFile: "/tmp/out.json",
+	})
+	if err != nil {
+		t.Fatalf("BuildShim: %v", err)
+	}
+	if strings.Contains(string(shim), "_neospec_function_names = {") {
+		t.Errorf("global should be absent for nil FunctionNames:\n%s", shim)
+	}
+}
+
+// TestBuildShim_FunctionNamesEscapesSpecialChars pins that both path
+// and name strings go through luaEscape — a filename with a quote or
+// a function name containing one (rare but valid via table-literal
+// string keys) would otherwise produce broken Lua.
+func TestBuildShim_FunctionNamesEscapesSpecialChars(t *testing.T) {
+	names := map[string]map[int]string{
+		`/src/weird"path.lua`: {1: `func"name`},
+	}
+	shim, err := BuildShim(ShimOpts{
+		Mode:          RunnerPlenaryBusted,
+		Dir:           "tests/",
+		OutputFile:    "/tmp/out.json",
+		FunctionNames: names,
+	})
+	if err != nil {
+		t.Fatalf("BuildShim: %v", err)
+	}
+	got := string(shim)
+	if !strings.Contains(got, `\"path.lua`) {
+		t.Errorf("path double-quote not escaped:\n%s", got)
+	}
+	if !strings.Contains(got, `func\"name`) {
+		t.Errorf("name double-quote not escaped:\n%s", got)
+	}
+}

@@ -121,12 +121,21 @@ func (e *Executor) runShim(ctx context.Context, sb ports.Sandbox, nvimPath strin
 	// policy the run command uses (coverage is a report, not a gate).
 	resolvedSources := resolveGlobs(ctx, opts.CoverageSources)
 
+	// Extract function names from the same resolved sources — reuses the
+	// exact call the run command makes (see WithFunctionNameResolver in
+	// runner/executor.go). No config knob because there's no cost worth
+	// gating: parse-and-walk is cheap, and unmapped files degrade to
+	// "anonymous@N" rather than an error. Empty map when no sources
+	// were configured; BuildShim emits nothing in that case.
+	functionNames := FunctionNameMap(resolvedSources)
+
 	shim, err := BuildShim(ShimOpts{
 		Mode:            opts.Mode,
 		Dir:             opts.Dir,
 		OutputFile:      outputFile,
 		CoverageSources: resolvedSources,
 		CoverageInclude: opts.CoverageInclude,
+		FunctionNames:   functionNames,
 	})
 	if err != nil {
 		return nil, err
